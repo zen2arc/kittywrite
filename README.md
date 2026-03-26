@@ -1,6 +1,8 @@
 # kittywrite
 
-lightweight, cat-themed code editor. built with egui, syntect, and lua 5.4.
+![](https://img.shields.io/badge/run%20tests-passing-green?style=flat&labelColor=black) ![](https://img.shields.io/badge/made%20with...-kittywrite%20and%20zed.-white?style=flat&labelColor=black)
+
+lightweight, cat-themed code editor. built with rust, egui, syntect and lua.
 
 ```
 =^.^=
