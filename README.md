@@ -111,7 +111,6 @@ src/
   highlighter.rs  syntect -> egui LayoutJob conversion
   theme.rs        cat color palette, egui style setup
   lua_engine.rs   mlua vm, config script loading, runtime exec
-
 init.lua          user config (place next to binary)
 ```
 
