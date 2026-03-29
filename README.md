@@ -1,6 +1,8 @@
 # kittywrite
 
-lightweight, cat-themed code editor. built with egui, syntect, and lua 5.4.
+![](https://img.shields.io/badge/run%20tests-passing-green?style=flat&labelColor=black) ![](https://img.shields.io/badge/made%20with...-kittywrite%20and%20zed.-white?style=flat&labelColor=black)
+
+lightweight, cat-themed code editor. built with rust, egui, syntect and lua.
 
 ```
 =^.^=
@@ -109,7 +111,6 @@ src/
   highlighter.rs  syntect -> egui LayoutJob conversion
   theme.rs        cat color palette, egui style setup
   lua_engine.rs   mlua vm, config script loading, runtime exec
-
 init.lua          user config (place next to binary)
 ```
 
