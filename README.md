@@ -60,13 +60,15 @@ look at `cargo-bundle` -- it wraps the binary for you.
 
 place this file next to the kittywrite binary. it's run on every startup.
 
-| key                   | type    | default | notes                          |
-|-----------------------|---------|---------|--------------------------------|
-| `font_size`           | number  | 14      | pixels, clamped to 8..48       |
-| `tab_width`           | number  | 4       | spaces per tab stop            |
-| `auto_indent`         | boolean | true    | match prev line indent on enter|
-| `word_wrap`           | boolean | false   | wrap at window edge            |
-| `show_line_numbers`   | boolean | true    | left gutter                    |
+| key                   | type    | default | notes                                |
+|-----------------------|---------|---------|--------------------------------------|
+| `font_size`           | number  | 14      | pixels, clamped to 8..48             |
+| `tab_width`           | number  | 4       | spaces per tab stop                  |
+| `auto_indent`         | boolean | true    | match prev line indent on enter      |
+| `auto_pair`           | boolean | true    | automatically insert brackets/quotes |
+| `line_height`         | number  | 1.0     | line height multiplier (1.0 = normal)|
+| `word_wrap`           | boolean | false   | wrap at window edge                  |
+| `show_line_numbers`   | boolean | true    | left gutter                          |
 
 example:
 
