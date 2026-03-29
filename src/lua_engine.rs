@@ -5,6 +5,8 @@ pub struct LuaConfig {
     pub font_size: f32,
     pub tab_width: usize,
     pub auto_indent: bool,
+    pub auto_pair: bool,
+    pub line_height: f32,
     pub word_wrap: bool,
     pub show_line_numbers: bool,
 }
@@ -15,6 +17,8 @@ impl Default for LuaConfig {
             font_size: 14.0,
             tab_width: 4,
             auto_indent: true,
+            auto_pair: true,
+            line_height: 1.0,
             word_wrap: false,
             show_line_numbers: true,
         }
@@ -22,21 +26,12 @@ impl Default for LuaConfig {
 }
 
 const BUILTIN_CONFIG: &str = r#"
--- kittywrite config
-
--- editor font size in pixels
 kittywrite.font_size = 14
-
--- how many spaces a tab counts for
 kittywrite.tab_width = 4
-
--- match the previous line's indent when you hit enter
 kittywrite.auto_indent = true
-
--- wrap long lines at the window edge
+kittywrite.auto_pair = true
+kittywrite.line_height = 1.0
 kittywrite.word_wrap = false
-
--- show line numbers in the left gutter
 kittywrite.show_line_numbers = true
 "#;
 
@@ -67,19 +62,18 @@ impl LuaEngine {
                 return;
             }
         };
-
         let _ = kw.set("font_size", 14.0_f64);
         let _ = kw.set("tab_width", 4_i64);
         let _ = kw.set("auto_indent", true);
+        let _ = kw.set("auto_pair", true);
+        let _ = kw.set("line_height", 1.0_f64);
         let _ = kw.set("word_wrap", false);
         let _ = kw.set("show_line_numbers", true);
-
         let _ = globals.set("kittywrite", kw);
     }
 
     fn run_config(&self) {
         let src = load_user_config().unwrap_or_else(|| BUILTIN_CONFIG.to_string());
-
         if let Err(e) = self.lua.load(&src).set_name("init.lua").exec() {
             eprintln!("lua config error: {}", e);
         }
@@ -91,7 +85,6 @@ impl LuaEngine {
             Ok(t) => t,
             Err(_) => return,
         };
-
         if let Ok(v) = kw.get::<&str, f64>("font_size") {
             self.config.font_size = (v as f32).clamp(8.0, 48.0);
         }
@@ -100,6 +93,12 @@ impl LuaEngine {
         }
         if let Ok(v) = kw.get::<&str, bool>("auto_indent") {
             self.config.auto_indent = v;
+        }
+        if let Ok(v) = kw.get::<&str, bool>("auto_pair") {
+            self.config.auto_pair = v;
+        }
+        if let Ok(v) = kw.get::<&str, f64>("line_height") {
+            self.config.line_height = (v as f32).clamp(1.0, 3.0);
         }
         if let Ok(v) = kw.get::<&str, bool>("word_wrap") {
             self.config.word_wrap = v;
@@ -111,7 +110,6 @@ impl LuaEngine {
 
     pub fn exec(&self, code: &str) -> Result<String, String> {
         let result = self.lua.load(code).eval::<LuaMultiValue>();
-
         match result {
             Ok(vals) => {
                 let out: Vec<String> = vals.iter().map(|v| format!("{:?}", v)).collect();

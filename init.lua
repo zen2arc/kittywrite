@@ -9,6 +9,12 @@ kittywrite.tab_width = 4
 -- match the previous line's leading whitespace when you hit enter
 kittywrite.auto_indent = true
 
+-- automatically insert matching pairs of characters (e.g. quotes, parentheses)
+kittywrite.auto_pair = true
+
+-- line height multiplier (1.0 = normal, >1.0 = taller, <1.0 = shorter)
+kittywrite.line_height = 1.0
+
 -- wrap long lines at the window edge instead of scrolling horizontally
 kittywrite.word_wrap = false
 
