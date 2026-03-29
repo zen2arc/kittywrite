@@ -15,7 +15,7 @@ eframe = { version = "0.27", default-features = false, features = ["default_font
 egui  = "0.27"
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
 mlua = { version = "0.9", features = ["lua54", "vendored"] }
-rfd = "0.14"
+rfd = "0.17"
 egui-phosphor = { version = "0.5", features = ["regular"] }
 
 [profile.release]
