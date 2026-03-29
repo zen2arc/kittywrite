@@ -18,6 +18,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "kittywrite",
         options,
-        Box::new(|cc| Box::new(app::KittyWriteApp::new(cc))),
+        Box::new(|cc| Ok(Box::new(app::KittyWriteApp::new(cc)))),
     )
 }

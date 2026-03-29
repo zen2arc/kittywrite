@@ -8,10 +8,17 @@ use syntect::highlighting::{FontStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
+fn compute_hash(s: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
 struct CacheEntry {
-    content_hash: u64,
+    generation: u64,
     language: String,
     style_key: u64,
+    content_hash: u64,
     job: LayoutJob,
 }
 
@@ -38,16 +45,18 @@ impl Highlighter {
         language: &str,
         font_size: f32,
         line_height: f32,
+        generation: u64,
     ) -> LayoutJob {
-        let mut hasher = DefaultHasher::new();
-        code.hash(&mut hasher);
-        let content_hash = hasher.finish();
         let style_key = ((font_size.to_bits() as u64) << 32) | (line_height.to_bits() as u64);
+        let content_hash = compute_hash(code);
 
         {
             let cache = self.cache.lock().unwrap();
             if let Some(entry) = cache.iter().find(|e| {
-                e.content_hash == content_hash && e.language == language && e.style_key == style_key
+                e.generation == generation
+                    && e.language == language
+                    && e.style_key == style_key
+                    && e.content_hash == content_hash
             }) {
                 return entry.job.clone();
             }
@@ -118,9 +127,10 @@ impl Highlighter {
                 cache.remove(0);
             }
             cache.push(CacheEntry {
-                content_hash,
+                generation,
                 language: language.to_string(),
                 style_key,
+                content_hash,
                 job: job.clone(),
             });
         }

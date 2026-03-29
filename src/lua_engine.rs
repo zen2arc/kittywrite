@@ -81,29 +81,29 @@ impl LuaEngine {
 
     fn read_config(&mut self) {
         let globals = self.lua.globals();
-        let kw: LuaTable = match globals.get("kittywrite") {
+        let kw: mlua::Table = match globals.get("kittywrite") {
             Ok(t) => t,
             Err(_) => return,
         };
-        if let Ok(v) = kw.get::<&str, f64>("font_size") {
+        if let Ok(v) = kw.get::<f64>("font_size") {
             self.config.font_size = (v as f32).clamp(8.0, 48.0);
         }
-        if let Ok(v) = kw.get::<&str, i64>("tab_width") {
+        if let Ok(v) = kw.get::<i64>("tab_width") {
             self.config.tab_width = (v as usize).clamp(1, 16);
         }
-        if let Ok(v) = kw.get::<&str, bool>("auto_indent") {
+        if let Ok(v) = kw.get::<bool>("auto_indent") {
             self.config.auto_indent = v;
         }
-        if let Ok(v) = kw.get::<&str, bool>("auto_pair") {
+        if let Ok(v) = kw.get::<bool>("auto_pair") {
             self.config.auto_pair = v;
         }
-        if let Ok(v) = kw.get::<&str, f64>("line_height") {
+        if let Ok(v) = kw.get::<f64>("line_height") {
             self.config.line_height = (v as f32).clamp(1.0, 3.0);
         }
-        if let Ok(v) = kw.get::<&str, bool>("word_wrap") {
+        if let Ok(v) = kw.get::<bool>("word_wrap") {
             self.config.word_wrap = v;
         }
-        if let Ok(v) = kw.get::<&str, bool>("show_line_numbers") {
+        if let Ok(v) = kw.get::<bool>("show_line_numbers") {
             self.config.show_line_numbers = v;
         }
     }

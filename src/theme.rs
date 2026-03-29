@@ -1,4 +1,4 @@
-use egui::{Color32, Rounding, Stroke, Visuals};
+use egui::{Color32, CornerRadius, Stroke, Visuals};
 
 #[derive(Clone, Copy)]
 pub struct CatTheme {
@@ -56,24 +56,24 @@ impl CatTheme {
 
         vis.widgets.noninteractive.bg_fill = self.bg_panel;
         vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0, self.fg_dim);
-        vis.widgets.noninteractive.rounding = Rounding::same(4.0);
+        vis.widgets.noninteractive.corner_radius = CornerRadius::same(4);
 
         vis.widgets.inactive.bg_fill = self.bg_tab_idle;
         vis.widgets.inactive.fg_stroke = Stroke::new(1.0, self.fg_dim);
-        vis.widgets.inactive.rounding = Rounding::same(4.0);
+        vis.widgets.inactive.corner_radius = CornerRadius::same(4);
 
         vis.widgets.hovered.bg_fill = self.bg_tab_active;
         vis.widgets.hovered.fg_stroke = Stroke::new(1.0, self.fg_main);
-        vis.widgets.hovered.rounding = Rounding::same(4.0);
+        vis.widgets.hovered.corner_radius = CornerRadius::same(4);
 
         vis.widgets.active.bg_fill = self.accent_paw;
         vis.widgets.active.fg_stroke = Stroke::new(1.0, self.bg_void);
-        vis.widgets.active.rounding = Rounding::same(4.0);
+        vis.widgets.active.corner_radius = CornerRadius::same(4);
 
         vis.selection.bg_fill = self.selection_bg;
         vis.selection.stroke = Stroke::new(1.0, self.accent_eye);
 
-        vis.window_rounding = Rounding::same(6.0);
+        vis.window_corner_radius = CornerRadius::same(6);
 
         style.visuals = vis;
         ctx.set_style(style);

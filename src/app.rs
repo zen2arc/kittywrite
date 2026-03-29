@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui::{Frame, Margin, Rounding};
+use egui::{CornerRadius, Frame, Margin};
 use egui_phosphor::regular as ph;
 
 use crate::editor::{detect_language, EditorTab};
@@ -10,7 +10,6 @@ use crate::highlighter::{self, Highlighter};
 use crate::lua_engine::LuaEngine;
 use crate::theme::CatTheme;
 
-const HL_DEBOUNCE_BYTES: usize = 200_000;
 const HL_DEBOUNCE_MS: u64 = 150;
 
 #[derive(Default)]
@@ -81,6 +80,7 @@ pub struct KittyWriteApp {
     pending_cursor: Option<(usize, Option<usize>)>,
 
     last_edit_instant: Instant,
+    content_generation: u64,
 }
 
 impl KittyWriteApp {
@@ -124,6 +124,7 @@ impl KittyWriteApp {
             pending_indent: None,
             pending_cursor: None,
             last_edit_instant: Instant::now() - Duration::from_secs(10),
+            content_generation: 0,
         }
     }
 
@@ -318,7 +319,7 @@ impl eframe::App for KittyWriteApp {
             .frame(
                 Frame::none()
                     .fill(theme.bg_void)
-                    .inner_margin(Margin::symmetric(6.0, 4.0)),
+                    .inner_margin(Margin::symmetric(6, 4)),
             )
             .show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
@@ -502,10 +503,10 @@ impl eframe::App for KittyWriteApp {
 
         egui::TopBottomPanel::top("tab_bar")
             .frame(Frame::none().fill(theme.bg_void).inner_margin(Margin {
-                left: 4.0,
-                right: 4.0,
-                top: 4.0,
-                bottom: 0.0,
+                left: 4,
+                right: 4,
+                top: 4,
+                bottom: 0,
             }))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -525,17 +526,17 @@ impl eframe::App for KittyWriteApp {
                         let label = self.tabs[i].tab_label();
                         Frame::none()
                             .fill(bg)
-                            .rounding(Rounding {
-                                nw: 4.0,
-                                ne: 4.0,
-                                sw: 0.0,
-                                se: 0.0,
+                            .corner_radius(CornerRadius {
+                                nw: 4,
+                                ne: 4,
+                                sw: 0,
+                                se: 0,
                             })
                             .inner_margin(Margin {
-                                left: 10.0,
-                                right: 6.0,
-                                top: 4.0,
-                                bottom: 4.0,
+                                left: 10,
+                                right: 6,
+                                top: 4,
+                                bottom: 4,
                             })
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
@@ -589,7 +590,7 @@ impl eframe::App for KittyWriteApp {
             .frame(
                 Frame::none()
                     .fill(theme.bg_void)
-                    .inner_margin(Margin::symmetric(10.0, 3.0)),
+                    .inner_margin(Margin::symmetric(10, 3)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -640,7 +641,7 @@ impl eframe::App for KittyWriteApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new("kittywrite 0.2.0")
+                            egui::RichText::new("kittywrite 0.2.1")
                                 .color(theme.accent_eye)
                                 .size(11.0),
                         );
@@ -654,7 +655,7 @@ impl eframe::App for KittyWriteApp {
                 .frame(
                     Frame::none()
                         .fill(theme.bg_panel)
-                        .inner_margin(Margin::symmetric(8.0, 5.0)),
+                        .inner_margin(Margin::symmetric(8, 5)),
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -755,7 +756,7 @@ impl eframe::App for KittyWriteApp {
                 .frame(
                     Frame::none()
                         .fill(theme.bg_panel)
-                        .inner_margin(Margin::symmetric(4.0, 4.0)),
+                        .inner_margin(Margin::symmetric(4, 4)),
                 )
                 .show(ctx, |ui| {
                     open_path = self.file_tree.show(ui, &theme);
@@ -763,6 +764,13 @@ impl eframe::App for KittyWriteApp {
             if let Some(path) = open_path {
                 self.open_file_path(path);
             }
+        }
+
+        // handle tab switch BEFORE extracting content
+        if let Some(i) = act.switch_tab {
+            self.active_tab = i;
+            self.pending_indent = None;
+            ctx.request_repaint();
         }
 
         let has_tabs = !self.tabs.is_empty();
@@ -817,17 +825,16 @@ impl eframe::App for KittyWriteApp {
         let find_idx_snap = self.find_match_idx;
         let content_len_before = content.len();
 
-        let large_file = content.len() > HL_DEBOUNCE_BYTES;
         let editing_fast = self.last_edit_instant.elapsed() < Duration::from_millis(HL_DEBOUNCE_MS);
-        let use_plain = large_file && editing_fast;
+        let use_plain = editing_fast;
 
         let mut editor_changed = false;
         let mut cursor_char: Option<usize> = None;
-        let mut editor_galley: Option<Arc<egui::Galley>> = None;
         let mut editor_id: Option<egui::Id> = None;
 
         let hl = Arc::clone(&self.hl);
         let ln_color = theme.fg_gutter;
+        let content_gen = self.content_generation;
 
         egui::CentralPanel::default()
             .frame(Frame::none().fill(theme.bg_editor))
@@ -848,11 +855,12 @@ impl eframe::App for KittyWriteApp {
                     let language = language.clone();
                     let fq = find_query_snap.clone();
                     let fm = find_matches_snap.clone();
-                    move |ui: &egui::Ui, text: &str, _wrap: f32| {
+                    move |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
+                        let text = text.as_str();
                         let mut job = if use_plain {
                             highlighter::plain_highlight(text, font_size, line_height)
                         } else {
-                            hl.highlight(text, &language, font_size, line_height)
+                            hl.highlight(text, &language, font_size, line_height, content_gen)
                         };
                         if !fq.is_empty() && !fm.is_empty() {
                             highlighter::apply_match_highlights(
@@ -862,12 +870,11 @@ impl eframe::App for KittyWriteApp {
                                 fq.len(),
                             );
                         }
-                        ui.fonts(|f| f.layout_job(job))
+                        ui.fonts_mut(|f| f.layout_job(job))
                     }
                 };
 
                 egui::ScrollArea::both()
-                    .id_source("editor_scroll")
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
@@ -890,43 +897,36 @@ impl eframe::App for KittyWriteApp {
                             }
 
                             let out = egui::TextEdit::multiline(&mut content)
-                                .id_source(("editor", active))
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(40)
-                                .code_editor()
+                                .font(egui::FontId::monospace(font_size))
                                 .layouter(&mut layouter)
                                 .show(ui);
 
                             editor_changed = out.response.changed();
                             editor_id = Some(out.response.id);
-                            editor_galley = Some(out.galley.clone());
-                            cursor_char =
-                                out.cursor_range.as_ref().map(|cr| cr.primary.ccursor.index);
+                            cursor_char = out.cursor_range.as_ref().map(|cr| cr.primary.index);
                         });
                     });
             });
 
-        if let (Some(pending), Some(galley), Some(id)) = (
-            self.pending_cursor.take(),
-            editor_galley.as_ref(),
-            editor_id,
-        ) {
-            let (primary_idx, secondary_idx) = pending;
-            let primary = galley.from_ccursor(egui::text::CCursor {
+        if let (Some((primary_idx, secondary_idx)), Some(id)) =
+            (self.pending_cursor.take(), editor_id)
+        {
+            let primary = egui::text::CCursor {
                 index: primary_idx,
                 prefer_next_row: false,
-            });
-            let secondary = galley.from_ccursor(egui::text::CCursor {
+            };
+            let secondary = egui::text::CCursor {
                 index: secondary_idx.unwrap_or(primary_idx),
                 prefer_next_row: false,
-            });
-            if let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) {
-                state
-                    .cursor
-                    .set_range(Some(egui::text::CursorRange { primary, secondary }));
-                state.store(ctx, id);
-                ctx.request_repaint();
-            }
+            };
+            let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(primary, secondary)));
+            state.store(ctx, id);
+            ctx.request_repaint();
         }
 
         if has_tabs && editor_changed {
@@ -985,7 +985,7 @@ impl eframe::App for KittyWriteApp {
                         .trim_end()
                         .ends_with(|c| matches!(c, '{' | '(' | '['))
                     {
-                        " ".repeat(self.lua.config.tab_width)
+                        "\t".to_string()
                     } else {
                         String::new()
                     };
@@ -1023,6 +1023,7 @@ impl eframe::App for KittyWriteApp {
                 self.tabs[active].modified = true;
                 self.tabs[active].update_line_count();
                 self.find_cache_key = (String::new(), 0);
+                self.content_generation = self.content_generation.wrapping_add(1);
             }
             if editor_changed {
                 self.last_edit_instant = Instant::now();
@@ -1037,7 +1038,7 @@ impl eframe::App for KittyWriteApp {
                 .frame(
                     Frame::window(&ctx.style())
                         .fill(theme.bg_panel)
-                        .rounding(Rounding::same(8.0)),
+                        .corner_radius(8),
                 )
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
@@ -1055,7 +1056,7 @@ impl eframe::App for KittyWriteApp {
                                 .strong(),
                         );
                         ui.label(
-                            egui::RichText::new("v0.2.0  ·  lightweight IDE")
+                            egui::RichText::new("v0.2.1  ·  lightweight IDE")
                                 .color(theme.fg_dim)
                                 .size(13.0),
                         );
@@ -1063,11 +1064,11 @@ impl eframe::App for KittyWriteApp {
                         ui.separator();
                         ui.add_space(6.0);
                         for (k, v) in [
-                            ("ui", "egui 0.27 / eframe"),
+                            ("ui", "egui 0.33 / eframe"),
                             ("highlighting", "syntect 5.2"),
                             ("scripting", "mlua (lua 5.4)"),
-                            ("dialogs", "rfd 0.14"),
-                            ("icons", "phosphor 0.5"),
+                            ("dialogs", "rfd 0.17"),
+                            ("icons", "phosphor 0.11"),
                         ] {
                             ui.horizontal(|ui| {
                                 ui.label(
@@ -1096,7 +1097,7 @@ impl eframe::App for KittyWriteApp {
                 .frame(
                     Frame::window(&ctx.style())
                         .fill(theme.bg_panel)
-                        .rounding(Rounding::same(6.0)),
+                        .corner_radius(6),
                 )
                 .show(ctx, |ui| {
                     ui.label(
@@ -1107,7 +1108,7 @@ impl eframe::App for KittyWriteApp {
                     ui.add_space(4.0);
                     let mut out_display = self.lua_output.clone();
                     egui::ScrollArea::vertical()
-                        .id_source("lua_out_scroll")
+                        .id_salt("lua_out_scroll")
                         .max_height(180.0)
                         .show(ui, |ui| {
                             ui.add(
@@ -1167,10 +1168,6 @@ impl eframe::App for KittyWriteApp {
         }
         if let Some(i) = act.close_tab {
             self.close_tab(i);
-        }
-        if let Some(i) = act.switch_tab {
-            self.active_tab = i;
-            self.pending_indent = None;
         }
         if act.toggle_find {
             self.show_find = !self.show_find;
