@@ -9,6 +9,7 @@ pub struct LuaConfig {
     pub line_height: f32,
     pub word_wrap: bool,
     pub show_line_numbers: bool,
+    pub theme: String,
 }
 
 impl Default for LuaConfig {
@@ -21,6 +22,7 @@ impl Default for LuaConfig {
             line_height: 1.0,
             word_wrap: false,
             show_line_numbers: true,
+            theme: "kittywrite".to_string(),
         }
     }
 }
@@ -33,6 +35,7 @@ kittywrite.auto_pair = true
 kittywrite.line_height = 1.0
 kittywrite.word_wrap = false
 kittywrite.show_line_numbers = true
+kittywrite.theme = "kittywrite" -- options: kittywrite, mocha, frappe, macchiato, latte
 "#;
 
 pub struct LuaEngine {
@@ -69,6 +72,7 @@ impl LuaEngine {
         let _ = kw.set("line_height", 1.0_f64);
         let _ = kw.set("word_wrap", false);
         let _ = kw.set("show_line_numbers", true);
+        let _ = kw.set("theme", "mocha");
         let _ = globals.set("kittywrite", kw);
     }
 
@@ -106,11 +110,14 @@ impl LuaEngine {
         if let Ok(v) = kw.get::<bool>("show_line_numbers") {
             self.config.show_line_numbers = v;
         }
+        if let Ok(v) = kw.get::<String>("theme") {
+            self.config.theme = v;
+        }
     }
 
-    pub fn exec(&self, code: &str) -> Result<String, String> {
+    pub fn exec(&mut self, code: &str) -> Result<String, String> {
         let result = self.lua.load(code).eval::<LuaMultiValue>();
-        match result {
+        let out = match result {
             Ok(vals) => {
                 let out: Vec<String> = vals.iter().map(|v| format!("{:?}", v)).collect();
                 Ok(out.join("  "))
@@ -121,7 +128,10 @@ impl LuaEngine {
                 .exec()
                 .map(|_| String::new())
                 .map_err(|e| e.to_string()),
-        }
+        };
+        // re-read config after execution so changes take effect
+        self.read_config();
+        out
     }
 }
 

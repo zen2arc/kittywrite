@@ -12,7 +12,10 @@ lightweight, cat-themed code editor. built with rust, egui, syntect and lua.
 
 - syntax highlighting for 40+ languages via syntect (pure rust, no C deps apart from lua)
 - tab bar -- open as many files as you want
-- line number gutter
+- line number gutter with git diff indicators (green bars for changed lines)
+- catppuccin themes (mocha, frappe, macchiato, latte) plus original kittywrite theme
+- quick open (`ctrl+p`) -- fuzzy search recently opened files
+- settings panel (`ctrl+,`) -- change theme, font, editor options
 - lua-powered config -- edit `init.lua` next to the binary
 - lua console at runtime (`tools > lua console`) for live tweaks
 - native file dialogs (open / save / save-as)
@@ -60,15 +63,16 @@ look at `cargo-bundle` -- it wraps the binary for you.
 
 place this file next to the kittywrite binary. it's run on every startup.
 
-| key                   | type    | default | notes                                |
-|-----------------------|---------|---------|--------------------------------------|
-| `font_size`           | number  | 14      | pixels, clamped to 8..48             |
-| `tab_width`           | number  | 4       | spaces per tab stop                  |
-| `auto_indent`         | boolean | true    | match prev line indent on enter      |
-| `auto_pair`           | boolean | true    | automatically insert brackets/quotes |
-| `line_height`         | number  | 1.0     | line height multiplier (1.0 = normal)|
-| `word_wrap`           | boolean | false   | wrap at window edge                  |
-| `show_line_numbers`   | boolean | true    | left gutter                          |
+| key                   | type    | default     | notes                                    |
+|-----------------------|---------|-------------|------------------------------------------|
+| `font_size`           | number  | 14          | pixels, clamped to 8..48                 |
+| `tab_width`           | number  | 4           | spaces per tab stop                      |
+| `auto_indent`         | boolean | true        | match prev line indent on enter          |
+| `auto_pair`           | boolean | true        | automatically insert brackets/quotes     |
+| `line_height`         | number  | 1.0         | line height multiplier (1.0 = normal)    |
+| `word_wrap`           | boolean | false       | wrap at window edge                      |
+| `show_line_numbers`   | boolean | true        | left gutter                              |
+| `theme`               | string  | "kittywrite"| kittywrite, mocha, frappe, macchiato, latte |
 
 example:
 
@@ -76,6 +80,7 @@ example:
 kittywrite.font_size = 16
 kittywrite.word_wrap = true
 kittywrite.show_line_numbers = false
+kittywrite.theme = "mocha"
 ```
 
 ## keyboard shortcuts
@@ -87,6 +92,8 @@ kittywrite.show_line_numbers = false
 | `ctrl+s`         | save            |
 | `ctrl+shift+s`   | save as         |
 | `ctrl+w`         | close tab       |
+| `ctrl+p`         | quick open (recent files) |
+| `ctrl+,`         | settings        |
 | `ctrl+z`         | undo            |
 | `ctrl+y`         | redo            |
 | `ctrl+x/c/v`     | cut / copy / paste |
@@ -115,6 +122,80 @@ src/
   lua_engine.rs   mlua vm, config script loading, runtime exec
 init.lua          user config (place next to binary)
 ```
+
+## theme reference
+
+| key              | what it colors                                    |
+|------------------|---------------------------------------------------|
+| `bg_void`        | deepest background, behind everything             |
+| `bg_panel`       | panels, menus, sidebar                            |
+| `bg_editor`      | main editor background                            |
+| `bg_tab_idle`    | inactive tab background                           |
+| `bg_tab_active`  | active tab background                             |
+| `fg_main`        | primary text color                                |
+| `fg_dim`         | secondary text, hints, placeholders               |
+| `fg_gutter`      | line number color (unused now, gutter uses bg_void)|
+| `accent_paw`     | errors, delete markers, active widgets            |
+| `accent_eye`     | highlights, search matches, selection border       |
+| `accent_fur`     | success, additions, links                         |
+| `selection_bg`   | text selection background (use rgba for alpha)    |
+
+## creating a custom theme
+
+themes are defined in `src/theme.rs`. to add a new theme:
+
+1. create a function that returns a `CatTheme`:
+
+```rust
+fn my_theme() -> CatTheme {
+    CatTheme {
+        bg_void: h("#0d1117"),
+        bg_panel: h("#161b22"),
+        bg_editor: h("#0d1117"),
+        bg_tab_idle: h("#21262d"),
+        bg_tab_active: h("#30363d"),
+        fg_main: h("#c9d1d9"),
+        fg_dim: h("#8b949e"),
+        fg_gutter: h("#30363d"),
+        accent_paw: h("#f85149"),
+        accent_eye: h("#e3b341"),
+        accent_fur: h("#3fb950"),
+        selection_bg: Color32::from_rgba_premultiplied(56, 139, 253, 40),
+    }
+}
+```
+
+2. register it in `CatTheme::from_name()`:
+
+```rust
+pub fn from_name(name: &str) -> Self {
+    match name.to_lowercase().as_str() {
+        "kittywrite" => kittywrite_original(),
+        "mocha" => catppuccin_mocha(),
+        // ... add yours:
+        "mytheme" => my_theme(),
+        _ => kittywrite_original(),
+    }
+}
+```
+
+3. add it to `CatTheme::list()`:
+
+```rust
+pub fn list() -> &'static [&'static str] {
+    &["kittywrite", "mocha", "frappe", "macchiato", "latte", "mytheme"]
+}
+```
+
+4. set it in `init.lua`:
+
+```lua
+kittywrite.theme = "mytheme"
+```
+
+the `h()` helper parses `#rrggbb` hex strings. for selection background,
+use `Color32::from_rgba_premultiplied(r, g, b, alpha)` where alpha is 0-255
+(40-80 gives a nice subtle highlight).
 
 ## why lua for config?
 
