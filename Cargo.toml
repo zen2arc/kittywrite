@@ -1,7 +1,7 @@
 [package]
 name = "kittywrite"
 authors = ["zen2arc"]
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 description = "lightweight open-source code editor"
 license = "MIT"
@@ -17,6 +17,7 @@ syntect = { version = "5.2", default-features = false, features = ["default-fanc
 mlua = { version = "0.11", features = ["lua54", "vendored"] }
 rfd = "0.17"
 egui-phosphor = { version = "0.11", features = ["regular"] }
+serde_json = "1"
 
 [profile.release]
 opt-level   = 3

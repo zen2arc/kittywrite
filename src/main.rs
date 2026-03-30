@@ -5,6 +5,7 @@ mod editor;
 mod filetree;
 mod highlighter;
 mod lua_engine;
+mod plugin;
 mod theme;
 
 fn main() -> eframe::Result<()> {

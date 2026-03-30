@@ -59,6 +59,19 @@ seeing lua error output.
 standard `cargo build --release` works. if you want a `.app` bundle,
 look at `cargo-bundle` -- it wraps the binary for you.
 
+## folders next to binary
+
+kittywrite creates these folders next to the binary on first launch:
+
+```
+kittywrite.exe (or kittywrite on linux/mac)
+  init.lua       user config
+  plugins/       plugin folders (each has init.lua inside)
+  themes/        custom theme json files
+  recent.txt     recent files list (auto-generated)
+  projects.txt   recent projects list (auto-generated)
+```
+
 ## config (`init.lua`)
 
 place this file next to the kittywrite binary. it's run on every startup.
@@ -117,90 +130,20 @@ src/
   main.rs         entry point, window setup
   app.rs          main egui update loop, all ui panels, action dispatch
   editor.rs       EditorTab struct, language detection from file extension
+  filetree.rs     file explorer sidebar with git status
   highlighter.rs  syntect -> egui LayoutJob conversion
-  theme.rs        cat color palette, egui style setup
+  theme.rs        cat color palette, egui style setup, json theme loading
   lua_engine.rs   mlua vm, config script loading, runtime exec
+  plugin.rs       plugin system, hooks, commands, editor api
 init.lua          user config (place next to binary)
+plugins/          user plugins (folder with init.lua in each subfolder)
+themes/           user themes (json files)
 ```
 
-## theme reference
+## themes & plugins
 
-| key              | what it colors                                    |
-|------------------|---------------------------------------------------|
-| `bg_void`        | deepest background, behind everything             |
-| `bg_panel`       | panels, menus, sidebar                            |
-| `bg_editor`      | main editor background                            |
-| `bg_tab_idle`    | inactive tab background                           |
-| `bg_tab_active`  | active tab background                             |
-| `fg_main`        | primary text color                                |
-| `fg_dim`         | secondary text, hints, placeholders               |
-| `fg_gutter`      | line number color (unused now, gutter uses bg_void)|
-| `accent_paw`     | errors, delete markers, active widgets            |
-| `accent_eye`     | highlights, search matches, selection border       |
-| `accent_fur`     | success, additions, links                         |
-| `selection_bg`   | text selection background (use rgba for alpha)    |
-
-## creating a custom theme
-
-themes are defined in `src/theme.rs`. to add a new theme:
-
-1. create a function that returns a `CatTheme`:
-
-```rust
-fn my_theme() -> CatTheme {
-    CatTheme {
-        bg_void: h("#0d1117"),
-        bg_panel: h("#161b22"),
-        bg_editor: h("#0d1117"),
-        bg_tab_idle: h("#21262d"),
-        bg_tab_active: h("#30363d"),
-        fg_main: h("#c9d1d9"),
-        fg_dim: h("#8b949e"),
-        fg_gutter: h("#30363d"),
-        accent_paw: h("#f85149"),
-        accent_eye: h("#e3b341"),
-        accent_fur: h("#3fb950"),
-        selection_bg: Color32::from_rgba_premultiplied(56, 139, 253, 40),
-    }
-}
-```
-
-2. register it in `CatTheme::from_name()`:
-
-```rust
-pub fn from_name(name: &str) -> Self {
-    match name.to_lowercase().as_str() {
-        "kittywrite" => kittywrite_original(),
-        "mocha" => catppuccin_mocha(),
-        // ... add yours:
-        "mytheme" => my_theme(),
-        _ => kittywrite_original(),
-    }
-}
-```
-
-3. add it to `CatTheme::list()`:
-
-```rust
-pub fn list() -> &'static [&'static str] {
-    &["kittywrite", "mocha", "frappe", "macchiato", "latte", "mytheme"]
-}
-```
-
-4. set it in `init.lua`:
-
-```lua
-kittywrite.theme = "mytheme"
-```
-
-the `h()` helper parses `#rrggbb` hex strings. for selection background,
-use `Color32::from_rgba_premultiplied(r, g, b, alpha)` where alpha is 0-255
-(40-80 gives a nice subtle highlight).
-
-## why lua for config?
-
-lua 5.4 compiles from source via the `vendored` feature in mlua, so no
-system lua required. it's a proper scripting language so you can put
-real logic in your config (conditionals, functions, whatever). the vm
-is tiny and startup is fast. future versions of kittywrite can expose
-more of the api to lua for actual plugin support.
+see [GUIDE.md](GUIDE.md) for:
+- creating custom themes (json format)
+- creating plugins (lua scripts)
+- full plugin api reference
+- theme color reference

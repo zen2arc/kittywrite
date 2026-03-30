@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,9 +9,22 @@ use crate::editor::{detect_language, EditorTab};
 use crate::filetree::FileTree;
 use crate::highlighter::{self, Highlighter};
 use crate::lua_engine::LuaEngine;
+use crate::plugin::PluginManager;
 use crate::theme::CatTheme;
 
 const HL_DEBOUNCE_MS: u64 = 150;
+const PROJECT_MARKERS: &[&str] = &[
+    ".git",
+    "Cargo.toml",
+    "package.json",
+    ".project",
+    "Makefile",
+    "CMakeLists.txt",
+    "go.mod",
+    "pyproject.toml",
+    "*.sln",
+    ".vscode",
+];
 
 #[derive(Default)]
 struct FrameActions {
@@ -65,6 +79,7 @@ pub struct KittyWriteApp {
     show_about: bool,
     show_settings: bool,
     show_lua_console: bool,
+    show_plugins: bool,
     lua_input: String,
     lua_output: String,
 
@@ -93,6 +108,18 @@ pub struct KittyWriteApp {
     git_diff_lines: std::collections::HashSet<usize>,
     git_diff_file: Option<std::path::PathBuf>,
     last_theme_name: String,
+
+    update_available: Option<String>,
+    update_checked: bool,
+    update_url: String,
+
+    plugins: PluginManager,
+
+    // project support
+    project_root: Option<std::path::PathBuf>,
+    recent_projects: Vec<String>,
+    show_project_switcher: bool,
+    project_switcher_query: String,
 }
 
 impl KittyWriteApp {
@@ -115,7 +142,7 @@ impl KittyWriteApp {
             .insert(egui::TextStyle::Button, egui::FontId::proportional(13.0));
         cc.egui_ctx.set_style(style);
 
-        Self {
+        let mut this = Self {
             tabs: vec![EditorTab::new_empty()],
             active_tab: 0,
             hl: Arc::new(Highlighter::default()),
@@ -125,6 +152,7 @@ impl KittyWriteApp {
             show_about: false,
             show_settings: false,
             show_lua_console: false,
+            show_plugins: false,
             lua_input: String::new(),
             lua_output: String::new(),
             show_find: false,
@@ -147,7 +175,112 @@ impl KittyWriteApp {
             git_diff_lines: std::collections::HashSet::new(),
             git_diff_file: None,
             last_theme_name: theme_name,
+            update_available: None,
+            update_checked: false,
+            update_url: String::new(),
+            plugins: PluginManager::new(),
+            project_root: None,
+            recent_projects: load_recent_projects(),
+            show_project_switcher: false,
+            project_switcher_query: String::new(),
+        };
+
+        // create data directories and load plugins/themes
+        this.reload_plugins();
+        this.reload_themes();
+
+        this
+    }
+
+    fn app_data_dir() -> Option<std::path::PathBuf> {
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+    }
+
+    fn reload_plugins(&mut self) {
+        if let Some(dir) = Self::app_data_dir() {
+            let plugin_dir = dir.join("plugins");
+            let _ = std::fs::create_dir_all(&plugin_dir);
+            self.plugins.load_plugins(&plugin_dir);
         }
+    }
+
+    fn update_plugin_api(&mut self) {
+        let tab = if !self.tabs.is_empty() && self.active_tab < self.tabs.len() {
+            Some(&self.tabs[self.active_tab])
+        } else {
+            None
+        };
+
+        let content = tab.map(|t| t.content.clone()).unwrap_or_default();
+        let file_path = tab
+            .and_then(|t| t.path.as_ref())
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let file_name = tab
+            .and_then(|t| t.path.as_ref())
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let line_count = tab.map(|t| t.line_count()).unwrap_or(1);
+        let theme_name = self.lua.config.theme.clone();
+        let font_size = self.lua.config.font_size;
+
+        let mut api = self.plugins.editor_api.borrow_mut();
+
+        let c = content.clone();
+        api.get_content = Some(Rc::new(move || c.clone()));
+
+        let c2 = content.clone();
+        api.set_content = Some(Rc::new(move |new_content| {
+            // set_content would need mutable access to tabs, handled via actions
+        }));
+
+        api.get_file_path = Some(Rc::new(move || file_path.clone()));
+        api.get_file_name = Some(Rc::new(move || file_name.clone()));
+        api.get_line_count = Some(Rc::new(move || line_count));
+
+        // cursor and selection - these are accessed via editor state during action processing
+        api.get_cursor_line = Some(Rc::new(|| 1usize));
+        api.get_cursor_col = Some(Rc::new(|| 0usize));
+
+        api.get_theme_name = Some(Rc::new(move || theme_name.clone()));
+        api.get_font_size = Some(Rc::new(move || font_size));
+    }
+
+    fn reload_themes(&mut self) {
+        // theme loading happens in theme.rs load_themes()
+        // just trigger a re-read by applying current theme
+        self.theme = CatTheme::from_name(&self.lua.config.theme);
+    }
+
+    fn install_plugin_from_folder(&mut self, src: &std::path::Path) -> Result<(), String> {
+        let dir = Self::app_data_dir().ok_or("cannot find app directory")?;
+        let plugin_dir = dir.join("plugins");
+        let _ = std::fs::create_dir_all(&plugin_dir);
+
+        let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("plugin");
+
+        let dest = plugin_dir.join(name);
+        copy_dir_recursive(src, &dest).map_err(|e| e.to_string())?;
+        self.reload_plugins();
+        Ok(())
+    }
+
+    fn install_theme_file(&mut self, src: &std::path::Path) -> Result<(), String> {
+        let dir = Self::app_data_dir().ok_or("cannot find app directory")?;
+        let theme_dir = dir.join("themes");
+        let _ = std::fs::create_dir_all(&theme_dir);
+
+        let name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("theme.json");
+
+        let dest = theme_dir.join(name);
+        std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     fn new_tab(&mut self) {
@@ -185,7 +318,7 @@ impl KittyWriteApp {
             self.active_tab = idx;
             return;
         }
-        match EditorTab::from_path(path) {
+        match EditorTab::from_path(path.clone()) {
             Ok(tab) => {
                 self.status = format!("opened {}", tab.title);
                 let path_str = tab
@@ -196,7 +329,16 @@ impl KittyWriteApp {
                 self.tabs.push(tab);
                 self.active_tab = self.tabs.len() - 1;
                 self.pending_indent = None;
-                self.add_recent_file(path_str);
+                self.add_recent_file(path_str.clone());
+                self.update_plugin_api();
+                self.plugins.fire_hook_str("open", &path_str);
+
+                // detect project root
+                if self.project_root.is_none() {
+                    if let Some(root) = detect_project_root(&path) {
+                        self.project_root = Some(root);
+                    }
+                }
             }
             Err(e) => self.status = format!("open failed: {}", e),
         }
@@ -209,6 +351,15 @@ impl KittyWriteApp {
             self.recent_files.truncate(20);
         }
         save_recent_files(&self.recent_files);
+    }
+
+    fn add_recent_project(&mut self, path: String) {
+        self.recent_projects.retain(|p| p != &path);
+        self.recent_projects.insert(0, path);
+        if self.recent_projects.len() > 10 {
+            self.recent_projects.truncate(10);
+        }
+        save_recent_projects(&self.recent_projects);
     }
 
     fn save_current(&mut self) {
@@ -234,7 +385,13 @@ impl KittyWriteApp {
         match self.tabs[idx].save() {
             Ok(_) => {
                 let n = self.tabs[idx].title.clone();
+                let path_str = self.tabs[idx]
+                    .path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
                 self.status = format!("saved {}", n);
+                self.plugins.fire_hook_str("save", &path_str);
             }
             Err(e) => self.status = format!("save failed: {}", e),
         }
@@ -304,11 +461,56 @@ impl KittyWriteApp {
 
 impl eframe::App for KittyWriteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // check for updates on first frame
+        if !self.update_checked {
+            self.update_checked = true;
+            check_for_update(&mut self.update_available, &mut self.update_url);
+        }
+
         // check if theme changed via lua config
         if self.lua.config.theme != self.last_theme_name {
             self.theme = CatTheme::from_name(&self.lua.config.theme);
             self.theme.apply(ctx);
             self.last_theme_name = self.lua.config.theme.clone();
+        }
+
+        // process plugin actions
+        let actions: Vec<_> = self.plugins.take_actions();
+        for action in actions {
+            match action {
+                crate::plugin::PluginAction::OpenFile(path) => {
+                    self.open_file_path(std::path::PathBuf::from(path));
+                }
+                crate::plugin::PluginAction::SaveFile => {
+                    self.save_current();
+                }
+                crate::plugin::PluginAction::NewFile => {
+                    self.new_tab();
+                }
+                crate::plugin::PluginAction::Notify(msg) => {
+                    self.status = msg;
+                }
+                crate::plugin::PluginAction::Log(msg) => {
+                    self.lua_output.push_str(&format!("{}\n", msg));
+                }
+                crate::plugin::PluginAction::SetTheme(name) => {
+                    self.lua.config.theme = name;
+                }
+                crate::plugin::PluginAction::SetFontSize(size) => {
+                    self.lua.config.font_size = size.clamp(8.0, 48.0);
+                }
+                crate::plugin::PluginAction::SetContent(content) => {
+                    if !self.tabs.is_empty() && self.active_tab < self.tabs.len() {
+                        self.tabs[self.active_tab].content = content;
+                    }
+                }
+                crate::plugin::PluginAction::SetSelection(text) => {
+                    // selection set would need editor state access
+                }
+                crate::plugin::PluginAction::SetCursor(line, col) => {
+                    // cursor set would need editor state access
+                }
+            }
         }
 
         let mut act = FrameActions::default();
@@ -549,6 +751,13 @@ impl eframe::App for KittyWriteApp {
                             ui.close_menu();
                         }
                         ui.separator();
+                        if ui
+                            .button(format!("{}  plugins", ph::PUZZLE_PIECE))
+                            .clicked()
+                        {
+                            self.show_plugins = !self.show_plugins;
+                            ui.close_menu();
+                        }
                         if ui.button(format!("{}  settings", ph::GEAR)).clicked() {
                             self.show_settings = !self.show_settings;
                             ui.close_menu();
@@ -704,10 +913,31 @@ impl eframe::App for KittyWriteApp {
                             .size(11.0),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(ver) = &self.update_available {
+                            let update_r = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!(
+                                        "{} update v{} available",
+                                        ph::DOWNLOAD_SIMPLE,
+                                        ver
+                                    ))
+                                    .color(theme.accent_fur)
+                                    .size(11.0),
+                                )
+                                .frame(false),
+                            );
+                            if update_r.clicked() {
+                                open_url(&self.update_url);
+                            }
+                            ui.add_space(8.0);
+                        }
                         ui.label(
-                            egui::RichText::new("kittywrite 0.2.1")
-                                .color(theme.accent_eye)
-                                .size(11.0),
+                            egui::RichText::new(format!(
+                                "kittywrite {}",
+                                env!("CARGO_PKG_VERSION")
+                            ))
+                            .color(theme.accent_eye)
+                            .size(11.0),
                         );
                     });
                 });
@@ -827,6 +1057,14 @@ impl eframe::App for KittyWriteApp {
                 });
             if let Some(path) = open_path {
                 self.open_file_path(path);
+            }
+
+            // set project root when folder is opened in file tree
+            if let Some(root) = &self.file_tree.root {
+                if self.project_root.as_ref() != Some(root) {
+                    self.project_root = Some(root.clone());
+                    self.add_recent_project(root.display().to_string());
+                }
             }
         }
 
@@ -1111,23 +1349,6 @@ impl eframe::App for KittyWriteApp {
                                     ln_color,
                                 );
 
-                                // paint green gutter bar for diff lines
-                                let diff_color = egui::Color32::from_rgb(137, 180, 90);
-                                let line_h = font_size * line_height;
-                                for n in 1..=total_lines {
-                                    if self.git_diff_lines.contains(&n) {
-                                        let y = ln_rect.top() + (n - 1) as f32 * line_h;
-                                        painter.rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(ln_rect.right() - 6.0, y),
-                                                egui::vec2(4.0, line_h),
-                                            ),
-                                            0.0,
-                                            diff_color,
-                                        );
-                                    }
-                                }
-
                                 ui.add(egui::Separator::default().vertical());
                             }
 
@@ -1136,7 +1357,31 @@ impl eframe::App for KittyWriteApp {
                                 .desired_rows(40)
                                 .font(egui::FontId::monospace(font_size))
                                 .layouter(&mut layouter)
+                                .id_salt("editor")
+                                .lock_focus(true)
                                 .show(ui);
+
+                            // paint git diff gutter using text galley row positions
+                            if show_ln && !self.git_diff_lines.is_empty() {
+                                let galley = &out.galley;
+                                let diff_color = egui::Color32::from_rgb(137, 180, 90);
+                                let text_top = out.response.rect.top();
+                                for (row_idx, row) in galley.rows.iter().enumerate() {
+                                    let line_num = row_idx + 1;
+                                    if self.git_diff_lines.contains(&line_num) {
+                                        let row_rect = row.rect();
+                                        let y = text_top + row_rect.top();
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(out.response.rect.left() - 8.0, y),
+                                                egui::vec2(4.0, row_rect.height()),
+                                            ),
+                                            1.0,
+                                            diff_color,
+                                        );
+                                    }
+                                }
+                            }
 
                             editor_changed = out.response.changed();
                             editor_id = Some(out.response.id);
@@ -1291,9 +1536,12 @@ impl eframe::App for KittyWriteApp {
                                 .strong(),
                         );
                         ui.label(
-                            egui::RichText::new("v0.2.1  ·  lightweight IDE")
-                                .color(theme.fg_dim)
-                                .size(13.0),
+                            egui::RichText::new(format!(
+                                "v{}  ·  lightweight IDE",
+                                env!("CARGO_PKG_VERSION")
+                            ))
+                            .color(theme.fg_dim)
+                            .size(13.0),
                         );
                         ui.add_space(8.0);
                         ui.separator();
@@ -1354,9 +1602,9 @@ impl eframe::App for KittyWriteApp {
                             .show_ui(ui, |ui| {
                                 for t in CatTheme::list() {
                                     let response =
-                                        ui.selectable_label(self.lua.config.theme == *t, *t);
+                                        ui.selectable_label(self.lua.config.theme == t, &t);
                                     if response.clicked() {
-                                        self.lua.config.theme = t.to_string();
+                                        self.lua.config.theme = t;
                                     }
                                 }
                             });
@@ -1426,7 +1674,207 @@ impl eframe::App for KittyWriteApp {
                         self.show_settings = false;
                     }
                 });
+            if self.show_settings && !open {
+                self.lua.save_config();
+            }
             self.show_settings = open;
+        }
+
+        if self.show_plugins {
+            let mut open = true;
+            egui::Window::new(format!("{} plugins", ph::PUZZLE_PIECE))
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .fixed_size([400.0, 300.0])
+                .frame(
+                    egui::Frame::none()
+                        .fill(theme.bg_panel)
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::same(12)),
+                )
+                .show(ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("installed plugins")
+                            .color(theme.accent_eye)
+                            .size(14.0)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+
+                    egui::ScrollArea::vertical()
+                        .max_height(200.0)
+                        .show(ui, |ui| {
+                            let plugins = self.plugins.list_plugins();
+                            if plugins.is_empty() {
+                                ui.label(
+                                    egui::RichText::new("no plugins installed")
+                                        .color(theme.fg_dim)
+                                        .size(12.0),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new("add plugins to the plugins/ folder")
+                                        .color(theme.fg_dim)
+                                        .size(11.0),
+                                );
+                            } else {
+                                for plugin in plugins {
+                                    ui.horizontal(|ui| {
+                                        let icon = if plugin.enabled {
+                                            ph::CHECK_CIRCLE
+                                        } else {
+                                            ph::CIRCLE
+                                        };
+                                        ui.label(
+                                            egui::RichText::new(icon)
+                                                .color(if plugin.enabled {
+                                                    theme.accent_fur
+                                                } else {
+                                                    theme.fg_dim
+                                                })
+                                                .size(16.0),
+                                        );
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(&plugin.name)
+                                                    .color(theme.fg_main)
+                                                    .size(12.0)
+                                                    .strong(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "v{} — {}",
+                                                    plugin.version, plugin.description
+                                                ))
+                                                .color(theme.fg_dim)
+                                                .size(10.0),
+                                            );
+                                        });
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let btn_text = if plugin.enabled {
+                                                    "disable"
+                                                } else {
+                                                    "enable"
+                                                };
+                                                if ui.small_button(btn_text).clicked() {
+                                                    self.plugins.toggle_plugin(&plugin.name);
+                                                }
+                                            },
+                                        );
+                                    });
+                                    ui.add_space(4.0);
+                                }
+                            }
+                        });
+
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    ui.label(
+                        egui::RichText::new("run command")
+                            .color(theme.accent_eye)
+                            .size(14.0)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+
+                    let cmds = self.plugins.list_commands();
+                    if cmds.is_empty() {
+                        ui.label(
+                            egui::RichText::new("no commands available")
+                                .color(theme.fg_dim)
+                                .size(11.0),
+                        );
+                    } else {
+                        // show commands as clickable buttons
+                        for (name, desc, plugin) in &cmds {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new(format!("run: {}", name))
+                                                .color(theme.accent_fur)
+                                                .size(11.0),
+                                        )
+                                        .fill(theme.bg_tab_idle)
+                                        .stroke(egui::Stroke::new(1.0, theme.accent_fur)),
+                                    )
+                                    .on_hover_text(format!("{} (from {})", desc, plugin))
+                                    .clicked()
+                                {
+                                    match self.plugins.fire_command(name) {
+                                        Some(Ok(result)) => {
+                                            self.status = format!("{}: {}", name, result);
+                                        }
+                                        Some(Err(e)) => {
+                                            self.status = format!("{}: error: {}", name, e);
+                                        }
+                                        None => {
+                                            self.status = format!("{}: command not found", name);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(format!("{}  install plugin…", ph::FOLDER_OPEN))
+                            .clicked()
+                        {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_title("select plugin folder")
+                                .pick_folder()
+                            {
+                                match self.install_plugin_from_folder(&path) {
+                                    Ok(_) => self.status = "plugin installed".to_string(),
+                                    Err(e) => self.status = format!("install failed: {}", e),
+                                }
+                            }
+                        }
+                        if ui
+                            .button(format!("{}  install theme…", ph::FILE_PLUS))
+                            .clicked()
+                        {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_title("select theme file")
+                                .add_filter("json", &["json"])
+                                .pick_file()
+                            {
+                                match self.install_theme_file(&path) {
+                                    Ok(_) => {
+                                        self.status = "theme installed".to_string();
+                                        self.reload_themes();
+                                    }
+                                    Err(e) => self.status = format!("install failed: {}", e),
+                                }
+                            }
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("  refresh  ").clicked() {
+                            self.reload_plugins();
+                            self.status = "plugins refreshed".to_string();
+                        }
+                        if ui.button("  close  ").clicked() {
+                            self.show_plugins = false;
+                        }
+                    });
+                });
+            self.show_plugins = open;
         }
 
         if self.show_lua_console {
@@ -1527,6 +1975,7 @@ impl eframe::App for KittyWriteApp {
             self.show_settings = !self.show_settings;
         }
         if act.quit {
+            self.lua.save_config();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if act.toggle_quick_open {
@@ -1543,6 +1992,22 @@ fn recent_files_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     Some(dir.join("recent.txt"))
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 fn load_recent_files() -> Vec<String> {
@@ -1562,6 +2027,52 @@ fn save_recent_files(files: &[String]) {
     };
     let content = files.join("\n");
     let _ = std::fs::write(path, content);
+}
+
+fn recent_projects_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    Some(dir.join("projects.txt"))
+}
+
+fn load_recent_projects() -> Vec<String> {
+    let path = match recent_projects_path() {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    std::fs::read_to_string(&path)
+        .map(|s| s.lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default()
+}
+
+fn save_recent_projects(projects: &[String]) {
+    let path = match recent_projects_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let content = projects.join("\n");
+    let _ = std::fs::write(path, content);
+}
+
+fn detect_project_root(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut current = path.to_path_buf();
+    loop {
+        for marker in PROJECT_MARKERS {
+            if marker.contains('*') {
+                // glob pattern
+                let pattern = marker.trim_start_matches('*');
+                if current.join(format!("{}{}", marker, pattern)).exists() {
+                    return Some(current);
+                }
+            } else if current.join(marker).exists() {
+                return Some(current);
+            }
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    None
 }
 
 fn compute_git_diff(path: &std::path::Path) -> std::collections::HashSet<usize> {
@@ -1623,4 +2134,69 @@ fn compute_git_diff(path: &std::path::Path) -> std::collections::HashSet<usize> 
     }
 
     lines
+}
+
+fn check_for_update(current: &mut Option<String>, url: &mut String) {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let api_url = "https://api.github.com/repos/zen2arc/kittywrite/releases/latest";
+
+    let output = match std::process::Command::new("curl")
+        .args([
+            "-s",
+            "-H",
+            "Accept: application/vnd.github.v3+json",
+            api_url,
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+
+    let json = String::from_utf8_lossy(&output.stdout);
+
+    // extract tag_name
+    let tag = match json.split("\"tag_name\":\"").nth(1) {
+        Some(s) => match s.split('"').next() {
+            Some(t) => t,
+            None => return,
+        },
+        None => return,
+    };
+
+    // version compare
+    if tag != current_version && is_newer_version(current_version, tag) {
+        *current = Some(tag.to_string());
+        *url = "https://github.com/zen2arc/kittywrite/releases/latest".to_string();
+    }
+}
+
+fn is_newer_version(current: &str, latest: &str) -> bool {
+    let c: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
+    let l: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
+
+    for i in 0..3.max(c.len()).max(l.len()) {
+        let cv = c.get(i).copied().unwrap_or(0);
+        let lv = l.get(i).copied().unwrap_or(0);
+        if lv > cv {
+            return true;
+        }
+        if lv < cv {
+            return false;
+        }
+    }
+    false
+}
+
+fn open_url(url: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", url])
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }

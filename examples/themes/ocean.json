@@ -1,0 +1,30 @@
+{
+  "name": "ocean",
+  "author": "zen2arc",
+  "is_light": false,
+  "ui": {
+    "bg_void": "#0a192f",
+    "bg_panel": "#112240",
+    "bg_editor": "#0d1b2a",
+    "bg_tab_idle": "#1d3557",
+    "bg_tab_active": "#2a4a6e",
+    "fg_main": "#ccd6f6",
+    "fg_dim": "#8892b0",
+    "fg_gutter": "#3a506b",
+    "accent_paw": "#ff6b6b",
+    "accent_eye": "#ffd93d",
+    "accent_fur": "#6bcb77",
+    "selection_bg": "#233554"
+  },
+  "syntax": {
+    "keyword": "#ff79c6",
+    "function": "#8be9fd",
+    "string": "#f1fa8c",
+    "comment": "#6272a4",
+    "number": "#bd93f9",
+    "type": "#8be9fd",
+    "variable": "#ffb86c",
+    "operator": "#ff79c6",
+    "punctuation": "#f8f8f2"
+  }
+}

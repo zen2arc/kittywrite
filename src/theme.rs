@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use egui::{Color32, CornerRadius, Stroke, Visuals};
 
 #[derive(Clone, Copy)]
 pub struct CatTheme {
+    // ui colors
     pub bg_void: Color32,
     pub bg_panel: Color32,
     pub bg_editor: Color32,
@@ -14,6 +18,24 @@ pub struct CatTheme {
     pub accent_eye: Color32,
     pub accent_fur: Color32,
     pub selection_bg: Color32,
+    // syntax colors
+    pub syntax_keyword: Color32,
+    pub syntax_function: Color32,
+    pub syntax_string: Color32,
+    pub syntax_comment: Color32,
+    pub syntax_number: Color32,
+    pub syntax_type: Color32,
+    pub syntax_variable: Color32,
+    pub syntax_operator: Color32,
+    pub syntax_punctuation: Color32,
+}
+
+#[derive(Clone)]
+pub struct ThemeInfo {
+    pub name: String,
+    pub author: String,
+    pub is_light: bool,
+    pub theme: CatTheme,
 }
 
 fn h(hex: &str) -> Color32 {
@@ -24,7 +46,40 @@ fn h(hex: &str) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+fn h_alpha(hex: &str, alpha: u8) -> Color32 {
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+    Color32::from_rgba_premultiplied(r, g, b, alpha)
+}
+
+fn default_syntax() -> (
+    Color32,
+    Color32,
+    Color32,
+    Color32,
+    Color32,
+    Color32,
+    Color32,
+    Color32,
+    Color32,
+) {
+    (
+        h("#c678dd"), // keyword
+        h("#61afef"), // function
+        h("#98c379"), // string
+        h("#5c6370"), // comment
+        h("#d19a66"), // number
+        h("#e5c07b"), // type
+        h("#e06c75"), // variable
+        h("#56b6c2"), // operator
+        h("#abb2bf"), // punctuation
+    )
+}
+
 fn kittywrite_original() -> CatTheme {
+    let (kw, func, str, cmt, num, typ, var, op, punct) = default_syntax();
     CatTheme {
         bg_void: h("#0b0b12"),
         bg_panel: h("#11111c"),
@@ -38,78 +93,123 @@ fn kittywrite_original() -> CatTheme {
         accent_eye: h("#f8bc4b"),
         accent_fur: h("#ac9cd0"),
         selection_bg: Color32::from_rgba_premultiplied(85, 65, 135, 65),
+        syntax_keyword: kw,
+        syntax_function: func,
+        syntax_string: str,
+        syntax_comment: cmt,
+        syntax_number: num,
+        syntax_type: typ,
+        syntax_variable: var,
+        syntax_operator: op,
+        syntax_punctuation: punct,
     }
 }
 
-// catppuccin mocha - exact values from palette v1.8.0
 fn catppuccin_mocha() -> CatTheme {
+    let (kw, func, str, cmt, num, typ, var, op, punct) = default_syntax();
     CatTheme {
-        bg_void: h("#11111b"),                                             // crust
-        bg_panel: h("#1e1e2e"),                                            // base
-        bg_editor: h("#181825"),                                           // mantle
-        bg_tab_idle: h("#313244"),                                         // surface0
-        bg_tab_active: h("#45475a"),                                       // surface1
-        fg_main: h("#cdd6f4"),                                             // text
-        fg_dim: h("#7f849c"),                                              // overlay1
-        fg_gutter: h("#45475a"),                                           // surface1
-        accent_paw: h("#f38ba8"),                                          // red
-        accent_eye: h("#f9e2af"),                                          // yellow
-        accent_fur: h("#a6e3a1"),                                          // green
-        selection_bg: Color32::from_rgba_premultiplied(137, 180, 250, 60), // blue a=0.24
+        bg_void: h("#11111b"),
+        bg_panel: h("#1e1e2e"),
+        bg_editor: h("#181825"),
+        bg_tab_idle: h("#313244"),
+        bg_tab_active: h("#45475a"),
+        fg_main: h("#cdd6f4"),
+        fg_dim: h("#7f849c"),
+        fg_gutter: h("#45475a"),
+        accent_paw: h("#f38ba8"),
+        accent_eye: h("#f9e2af"),
+        accent_fur: h("#a6e3a1"),
+        selection_bg: Color32::from_rgba_premultiplied(137, 180, 250, 60),
+        syntax_keyword: h("#cba6f7"),
+        syntax_function: h("#89b4fa"),
+        syntax_string: h("#a6e3a1"),
+        syntax_comment: h("#6c7086"),
+        syntax_number: h("#fab387"),
+        syntax_type: h("#f9e2af"),
+        syntax_variable: h("#f38ba8"),
+        syntax_operator: h("#89dceb"),
+        syntax_punctuation: h("#cdd6f4"),
     }
 }
 
-// catppuccin frappe - exact values from palette v1.8.0
 fn catppuccin_frappe() -> CatTheme {
+    let (_, _, _, _, _, _, _, _, _) = default_syntax();
     CatTheme {
-        bg_void: h("#232634"),                                             // crust
-        bg_panel: h("#303446"),                                            // base
-        bg_editor: h("#292c3c"),                                           // mantle
-        bg_tab_idle: h("#414559"),                                         // surface0
-        bg_tab_active: h("#51576d"),                                       // surface1
-        fg_main: h("#c6d0f5"),                                             // text
-        fg_dim: h("#838ba7"),                                              // overlay1
-        fg_gutter: h("#51576d"),                                           // surface1
-        accent_paw: h("#e78284"),                                          // red
-        accent_eye: h("#e5c890"),                                          // yellow
-        accent_fur: h("#a6d189"),                                          // green
-        selection_bg: Color32::from_rgba_premultiplied(140, 170, 238, 60), // blue a=0.24
+        bg_void: h("#232634"),
+        bg_panel: h("#303446"),
+        bg_editor: h("#292c3c"),
+        bg_tab_idle: h("#414559"),
+        bg_tab_active: h("#51576d"),
+        fg_main: h("#c6d0f5"),
+        fg_dim: h("#838ba7"),
+        fg_gutter: h("#51576d"),
+        accent_paw: h("#e78284"),
+        accent_eye: h("#e5c890"),
+        accent_fur: h("#a6d189"),
+        selection_bg: Color32::from_rgba_premultiplied(140, 170, 238, 60),
+        syntax_keyword: h("#ca9ee6"),
+        syntax_function: h("#8caaee"),
+        syntax_string: h("#a6d189"),
+        syntax_comment: h("#737994"),
+        syntax_number: h("#ef9f76"),
+        syntax_type: h("#e5c890"),
+        syntax_variable: h("#e78284"),
+        syntax_operator: h("#81d8b8"),
+        syntax_punctuation: h("#c6d0f5"),
     }
 }
 
-// catppuccin macchiato - exact values from palette v1.8.0
 fn catppuccin_macchiato() -> CatTheme {
+    let (_, _, _, _, _, _, _, _, _) = default_syntax();
     CatTheme {
-        bg_void: h("#181924"),                                             // crust
-        bg_panel: h("#24273a"),                                            // base
-        bg_editor: h("#1e2030"),                                           // mantle
-        bg_tab_idle: h("#363a4f"),                                         // surface0
-        bg_tab_active: h("#494d64"),                                       // surface1
-        fg_main: h("#cad3f5"),                                             // text
-        fg_dim: h("#8087a2"),                                              // overlay1
-        fg_gutter: h("#494d64"),                                           // surface1
-        accent_paw: h("#ed8796"),                                          // red
-        accent_eye: h("#eed49f"),                                          // yellow
-        accent_fur: h("#a6da95"),                                          // green
-        selection_bg: Color32::from_rgba_premultiplied(138, 173, 244, 60), // blue a=0.24
+        bg_void: h("#181924"),
+        bg_panel: h("#24273a"),
+        bg_editor: h("#1e2030"),
+        bg_tab_idle: h("#363a4f"),
+        bg_tab_active: h("#494d64"),
+        fg_main: h("#cad3f5"),
+        fg_dim: h("#8087a2"),
+        fg_gutter: h("#494d64"),
+        accent_paw: h("#ed8796"),
+        accent_eye: h("#eed49f"),
+        accent_fur: h("#a6da95"),
+        selection_bg: Color32::from_rgba_premultiplied(138, 173, 244, 60),
+        syntax_keyword: h("#c6a0f6"),
+        syntax_function: h("#8aadf4"),
+        syntax_string: h("#a6da95"),
+        syntax_comment: h("#6c7086"),
+        syntax_number: h("#f5a97f"),
+        syntax_type: h("#eed49f"),
+        syntax_variable: h("#ed8796"),
+        syntax_operator: h("#8bd5ca"),
+        syntax_punctuation: h("#cad3f5"),
     }
 }
 
-// catppuccin latte - exact values from palette v1.8.0
 fn catppuccin_latte() -> CatTheme {
+    let (_, _, _, _, _, _, _, _, _) = default_syntax();
     CatTheme {
-        bg_void: h("#dce0e8"),                                            // crust
-        bg_panel: h("#eff1f5"),                                           // base
-        bg_editor: h("#e6e9ef"),                                          // mantle
-        bg_tab_idle: h("#ccd0da"),                                        // surface0
-        bg_tab_active: h("#bcc0cc"),                                      // surface1
-        fg_main: h("#4c4f69"),                                            // text
-        fg_dim: h("#8c8fa1"),                                             // overlay1
-        fg_gutter: h("#bcc0cc"),                                          // surface1
-        accent_paw: h("#d20f39"),                                         // red
-        accent_eye: h("#df8e1d"),                                         // yellow
-        accent_fur: h("#40a02b"),                                         // green
-        selection_bg: Color32::from_rgba_premultiplied(30, 102, 245, 60), // blue a=0.24
+        bg_void: h("#dce0e8"),
+        bg_panel: h("#eff1f5"),
+        bg_editor: h("#e6e9ef"),
+        bg_tab_idle: h("#ccd0da"),
+        bg_tab_active: h("#bcc0cc"),
+        fg_main: h("#4c4f69"),
+        fg_dim: h("#8c8fa1"),
+        fg_gutter: h("#bcc0cc"),
+        accent_paw: h("#d20f39"),
+        accent_eye: h("#df8e1d"),
+        accent_fur: h("#40a02b"),
+        selection_bg: Color32::from_rgba_premultiplied(30, 102, 245, 60),
+        syntax_keyword: h("#8839ef"),
+        syntax_function: h("#1e66f5"),
+        syntax_string: h("#40a02b"),
+        syntax_comment: h("#9ca0b0"),
+        syntax_number: h("#fe640b"),
+        syntax_type: h("#df8e1d"),
+        syntax_variable: h("#d20f39"),
+        syntax_operator: h("#179299"),
+        syntax_punctuation: h("#4c4f69"),
     }
 }
 
@@ -121,18 +221,87 @@ impl Default for CatTheme {
 
 impl CatTheme {
     pub fn from_name(name: &str) -> Self {
-        match name.to_lowercase().as_str() {
-            "kittywrite" => kittywrite_original(),
-            "mocha" => catppuccin_mocha(),
-            "frappe" | "frappé" => catppuccin_frappe(),
-            "macchiato" => catppuccin_macchiato(),
-            "latte" => catppuccin_latte(),
-            _ => kittywrite_original(),
+        let themes = load_themes();
+        for t in themes {
+            if t.name.to_lowercase() == name.to_lowercase() {
+                return t.theme;
+            }
         }
+        kittywrite_original()
     }
 
-    pub fn list() -> &'static [&'static str] {
-        &["kittywrite", "mocha", "frappe", "macchiato", "latte"]
+    pub fn list() -> Vec<String> {
+        let themes = load_themes();
+        themes.iter().map(|t| t.name.clone()).collect()
+    }
+
+    pub fn load_from_file(path: &std::path::Path) -> Option<ThemeInfo> {
+        let content = std::fs::read_to_string(path).ok()?;
+        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+        let name = json.get("name")?.as_str()?.to_string();
+        let author = json
+            .get("author")
+            .and_then(|a| a.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let is_light = json
+            .get("is_light")
+            .and_then(|l| l.as_bool())
+            .unwrap_or(false);
+
+        let ui = json.get("ui")?;
+        let syntax = json.get("syntax");
+
+        let get_color = |key: &str, default: &str| -> Color32 {
+            ui.get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| h(s))
+                .unwrap_or_else(|| h(default))
+        };
+
+        let get_syntax_color = |key: &str, default: &str| -> Color32 {
+            syntax
+                .and_then(|s| s.get(key))
+                .and_then(|v| v.as_str())
+                .map(|s| h(s))
+                .unwrap_or_else(|| h(default))
+        };
+
+        let theme = CatTheme {
+            bg_void: get_color("bg_void", "#0b0b12"),
+            bg_panel: get_color("bg_panel", "#11111c"),
+            bg_editor: get_color("bg_editor", "#0f0f18"),
+            bg_tab_idle: get_color("bg_tab_idle", "#151522"),
+            bg_tab_active: get_color("bg_tab_active", "#1e1e32"),
+            fg_main: get_color("fg_main", "#d4cfe2"),
+            fg_dim: get_color("fg_dim", "#69647d"),
+            fg_gutter: get_color("fg_gutter", "#37344b"),
+            accent_paw: get_color("accent_paw", "#da8aa2"),
+            accent_eye: get_color("accent_eye", "#f8bc4b"),
+            accent_fur: get_color("accent_fur", "#ac9cd0"),
+            selection_bg: ui
+                .get("selection_bg")
+                .and_then(|v| v.as_str())
+                .map(|s| h_alpha(s, 60))
+                .unwrap_or_else(|| Color32::from_rgba_premultiplied(85, 65, 135, 65)),
+            syntax_keyword: get_syntax_color("keyword", "#c678dd"),
+            syntax_function: get_syntax_color("function", "#61afef"),
+            syntax_string: get_syntax_color("string", "#98c379"),
+            syntax_comment: get_syntax_color("comment", "#5c6370"),
+            syntax_number: get_syntax_color("number", "#d19a66"),
+            syntax_type: get_syntax_color("type", "#e5c07b"),
+            syntax_variable: get_syntax_color("variable", "#e06c75"),
+            syntax_operator: get_syntax_color("operator", "#56b6c2"),
+            syntax_punctuation: get_syntax_color("punctuation", "#abb2bf"),
+        };
+
+        Some(ThemeInfo {
+            name,
+            author,
+            is_light,
+            theme,
+        })
     }
 
     pub fn apply(&self, ctx: &egui::Context) {
@@ -169,4 +338,62 @@ impl CatTheme {
         style.visuals = vis;
         ctx.set_style(style);
     }
+}
+
+fn load_themes() -> Vec<ThemeInfo> {
+    // start with built-in themes
+    let mut themes = vec![
+        ThemeInfo {
+            name: "kittywrite".to_string(),
+            author: "kittywrite".to_string(),
+            is_light: false,
+            theme: kittywrite_original(),
+        },
+        ThemeInfo {
+            name: "mocha".to_string(),
+            author: "catppuccin".to_string(),
+            is_light: false,
+            theme: catppuccin_mocha(),
+        },
+        ThemeInfo {
+            name: "frappe".to_string(),
+            author: "catppuccin".to_string(),
+            is_light: false,
+            theme: catppuccin_frappe(),
+        },
+        ThemeInfo {
+            name: "macchiato".to_string(),
+            author: "catppuccin".to_string(),
+            is_light: false,
+            theme: catppuccin_macchiato(),
+        },
+        ThemeInfo {
+            name: "latte".to_string(),
+            author: "catppuccin".to_string(),
+            is_light: true,
+            theme: catppuccin_latte(),
+        },
+    ];
+
+    // load custom themes from themes/ directory
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let themes_dir = dir.join("themes");
+            if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                        if let Some(info) = CatTheme::load_from_file(&path) {
+                            // don't override built-in themes
+                            if !themes.iter().any(|t| t.name == info.name) {
+                                themes.push(info);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    themes
 }
