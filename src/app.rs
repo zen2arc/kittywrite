@@ -1426,6 +1426,9 @@ impl eframe::App for KittyWriteApp {
                         self.show_settings = false;
                     }
                 });
+            if self.show_settings && !open {
+                self.lua.save_config();
+            }
             self.show_settings = open;
         }
 
@@ -1527,6 +1530,7 @@ impl eframe::App for KittyWriteApp {
             self.show_settings = !self.show_settings;
         }
         if act.quit {
+            self.lua.save_config();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if act.toggle_quick_open {

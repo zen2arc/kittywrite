@@ -133,6 +133,33 @@ impl LuaEngine {
         self.read_config();
         out
     }
+
+    pub fn save_config(&self) {
+        let path = match config_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let content = format!(
+            r#"kittywrite.font_size = {}
+kittywrite.tab_width = {}
+kittywrite.auto_indent = {}
+kittywrite.auto_pair = {}
+kittywrite.line_height = {}
+kittywrite.word_wrap = {}
+kittywrite.show_line_numbers = {}
+kittywrite.theme = "{}"
+"#,
+            self.config.font_size,
+            self.config.tab_width,
+            self.config.auto_indent,
+            self.config.auto_pair,
+            self.config.line_height,
+            self.config.word_wrap,
+            self.config.show_line_numbers,
+            self.config.theme,
+        );
+        let _ = std::fs::write(path, content);
+    }
 }
 
 impl Default for LuaEngine {
@@ -141,9 +168,13 @@ impl Default for LuaEngine {
     }
 }
 
-fn load_user_config() -> Option<String> {
+fn config_path() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let path = dir.join("init.lua");
+    Some(dir.join("init.lua"))
+}
+
+fn load_user_config() -> Option<String> {
+    let path = config_path()?;
     std::fs::read_to_string(path).ok()
 }
