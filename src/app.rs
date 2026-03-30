@@ -25,6 +25,8 @@ struct FrameActions {
     toggle_find: bool,
     toggle_replace: bool,
     toggle_file_tree: bool,
+    toggle_quick_open: bool,
+    toggle_settings: bool,
     find_next: bool,
     find_prev: bool,
     replace_one: bool,
@@ -61,6 +63,7 @@ pub struct KittyWriteApp {
     status: String,
 
     show_about: bool,
+    show_settings: bool,
     show_lua_console: bool,
     lua_input: String,
     lua_output: String,
@@ -81,11 +84,22 @@ pub struct KittyWriteApp {
 
     last_edit_instant: Instant,
     content_generation: u64,
+
+    recent_files: Vec<String>,
+    show_quick_open: bool,
+    quick_open_query: String,
+    quick_open_selected: usize,
+
+    git_diff_lines: std::collections::HashSet<usize>,
+    git_diff_file: Option<std::path::PathBuf>,
+    last_theme_name: String,
 }
 
 impl KittyWriteApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let theme = CatTheme::default();
+        let lua = LuaEngine::new();
+        let theme = CatTheme::from_name(&lua.config.theme);
+        let theme_name = lua.config.theme.clone();
         theme.apply(&cc.egui_ctx);
 
         let mut fonts = egui::FontDefinitions::default();
@@ -106,9 +120,10 @@ impl KittyWriteApp {
             active_tab: 0,
             hl: Arc::new(Highlighter::default()),
             theme,
-            lua: LuaEngine::new(),
+            lua,
             status: "ready".to_string(),
             show_about: false,
+            show_settings: false,
             show_lua_console: false,
             lua_input: String::new(),
             lua_output: String::new(),
@@ -125,6 +140,13 @@ impl KittyWriteApp {
             pending_cursor: None,
             last_edit_instant: Instant::now() - Duration::from_secs(10),
             content_generation: 0,
+            recent_files: load_recent_files(),
+            show_quick_open: false,
+            quick_open_query: String::new(),
+            quick_open_selected: 0,
+            git_diff_lines: std::collections::HashSet::new(),
+            git_diff_file: None,
+            last_theme_name: theme_name,
         }
     }
 
@@ -139,9 +161,15 @@ impl KittyWriteApp {
             match EditorTab::from_path(path) {
                 Ok(tab) => {
                     self.status = format!("opened {}", tab.title);
+                    let path_str = tab
+                        .path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
                     self.tabs.push(tab);
                     self.active_tab = self.tabs.len() - 1;
                     self.pending_indent = None;
+                    self.add_recent_file(path_str);
                 }
                 Err(e) => self.status = format!("open failed: {}", e),
             }
@@ -160,12 +188,27 @@ impl KittyWriteApp {
         match EditorTab::from_path(path) {
             Ok(tab) => {
                 self.status = format!("opened {}", tab.title);
+                let path_str = tab
+                    .path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
                 self.tabs.push(tab);
                 self.active_tab = self.tabs.len() - 1;
                 self.pending_indent = None;
+                self.add_recent_file(path_str);
             }
             Err(e) => self.status = format!("open failed: {}", e),
         }
+    }
+
+    fn add_recent_file(&mut self, path: String) {
+        self.recent_files.retain(|p| p != &path);
+        self.recent_files.insert(0, path);
+        if self.recent_files.len() > 20 {
+            self.recent_files.truncate(20);
+        }
+        save_recent_files(&self.recent_files);
     }
 
     fn save_current(&mut self) {
@@ -261,6 +304,13 @@ impl KittyWriteApp {
 
 impl eframe::App for KittyWriteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // check if theme changed via lua config
+        if self.lua.config.theme != self.last_theme_name {
+            self.theme = CatTheme::from_name(&self.lua.config.theme);
+            self.theme.apply(ctx);
+            self.last_theme_name = self.lua.config.theme.clone();
+        }
+
         let mut act = FrameActions::default();
         let enter_pressed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
 
@@ -297,6 +347,12 @@ impl eframe::App for KittyWriteApp {
             if ctrl && i.key_pressed(egui::Key::B) {
                 act.toggle_file_tree = true;
             }
+            if ctrl && !shift && i.key_pressed(egui::Key::P) {
+                act.toggle_quick_open = true;
+            }
+            if ctrl && i.key_pressed(egui::Key::Comma) {
+                act.toggle_settings = true;
+            }
             if i.key_pressed(egui::Key::F3) && !shift {
                 act.find_next = true;
             }
@@ -305,6 +361,9 @@ impl eframe::App for KittyWriteApp {
             }
             if i.key_pressed(egui::Key::Escape) && self.show_find {
                 act.toggle_find = true;
+            }
+            if i.key_pressed(egui::Key::Escape) && self.show_quick_open {
+                act.toggle_quick_open = true;
             }
         });
 
@@ -487,6 +546,11 @@ impl eframe::App for KittyWriteApp {
                             .clicked()
                         {
                             self.show_lua_console = !self.show_lua_console;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(format!("{}  settings", ph::GEAR)).clicked() {
+                            self.show_settings = !self.show_settings;
                             ui.close_menu();
                         }
                     });
@@ -766,6 +830,134 @@ impl eframe::App for KittyWriteApp {
             }
         }
 
+        if self.show_quick_open {
+            let mut close_quick_open = false;
+            let mut open_file: Option<String> = None;
+            egui::Window::new("quick open")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -50.0])
+                .fixed_size([400.0, 300.0])
+                .frame(
+                    egui::Frame::none()
+                        .fill(theme.bg_panel)
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::same(8)),
+                )
+                .show(ctx, |ui| {
+                    let input = ui.add(
+                        egui::TextEdit::singleline(&mut self.quick_open_query)
+                            .hint_text("type to search...")
+                            .desired_width(f32::INFINITY),
+                    );
+                    input.request_focus();
+
+                    ui.separator();
+
+                    let query = self.quick_open_query.to_lowercase();
+                    let matches: Vec<_> = self
+                        .recent_files
+                        .iter()
+                        .filter(|f| {
+                            query.is_empty()
+                                || f.to_lowercase().contains(&query)
+                                || f.rsplit('\\')
+                                    .next()
+                                    .unwrap_or(f)
+                                    .to_lowercase()
+                                    .contains(&query)
+                                || f.rsplit('/')
+                                    .next()
+                                    .unwrap_or(f)
+                                    .to_lowercase()
+                                    .contains(&query)
+                        })
+                        .take(10)
+                        .cloned()
+                        .collect();
+
+                    if matches.is_empty() {
+                        ui.label(
+                            egui::RichText::new("no recent files")
+                                .color(theme.fg_dim)
+                                .size(12.0),
+                        );
+                    } else {
+                        for (i, path) in matches.iter().enumerate() {
+                            let name = path.rsplit(&['\\', '/'][..]).next().unwrap_or(path);
+                            let is_selected = i == self.quick_open_selected;
+                            let bg = if is_selected {
+                                theme.bg_tab_active
+                            } else {
+                                theme.bg_void
+                            };
+
+                            let response = egui::Frame::none()
+                                .fill(bg)
+                                .inner_margin(Margin::symmetric(8, 4))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(ph::FILE_CODE)
+                                                .color(theme.fg_dim)
+                                                .size(12.0),
+                                        );
+                                        ui.add_space(4.0);
+                                        ui.label(
+                                            egui::RichText::new(name)
+                                                .color(if is_selected {
+                                                    theme.accent_eye
+                                                } else {
+                                                    theme.fg_main
+                                                })
+                                                .size(12.0),
+                                        );
+                                    });
+                                })
+                                .response;
+
+                            if response.clicked() {
+                                open_file = Some(path.clone());
+                                close_quick_open = true;
+                            }
+                        }
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("enter to open  esc to close")
+                                    .color(theme.fg_dim)
+                                    .size(10.0),
+                            );
+                        });
+
+                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !matches.is_empty() {
+                            let idx = self.quick_open_selected.min(matches.len() - 1);
+                            open_file = Some(matches[idx].clone());
+                            close_quick_open = true;
+                        }
+                        if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                            self.quick_open_selected =
+                                (self.quick_open_selected + 1).min(matches.len() - 1);
+                        }
+                        if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                            self.quick_open_selected = self.quick_open_selected.saturating_sub(1);
+                        }
+                    }
+
+                    if input.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        close_quick_open = true;
+                    }
+                });
+
+            if let Some(path) = open_file {
+                self.open_file_path(std::path::PathBuf::from(path));
+            }
+            if close_quick_open {
+                self.show_quick_open = false;
+            }
+        }
+
         // handle tab switch BEFORE extracting content
         if let Some(i) = act.switch_tab {
             self.active_tab = i;
@@ -775,6 +967,17 @@ impl eframe::App for KittyWriteApp {
 
         let has_tabs = !self.tabs.is_empty();
         let active = self.active_tab;
+
+        // update git diff if file changed
+        if has_tabs {
+            let current_path = self.tabs[active].path.clone();
+            if current_path != self.git_diff_file {
+                self.git_diff_file = current_path.clone();
+                if let Some(p) = current_path {
+                    self.git_diff_lines = compute_git_diff(&p);
+                }
+            }
+        }
 
         let (mut content, language, mut line_count) = if has_tabs {
             let c = std::mem::take(&mut self.tabs[active].content);
@@ -879,20 +1082,52 @@ impl eframe::App for KittyWriteApp {
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
                             if show_ln {
-                                ui.vertical(|ui| {
-                                    ui.set_min_width(48.0);
-                                    ui.set_max_width(48.0);
-                                    ui.add_space(2.0);
-                                    let mut ln_text = String::with_capacity((line_count + 2) * 5);
-                                    for n in 1..=(line_count + 2) {
-                                        ln_text.push_str(&format!("{:>4}\n", n));
+                                // line numbers + git diff gutter combined
+                                let total_lines = line_count + 2;
+                                let mut ln_text = String::with_capacity(total_lines * 6);
+                                for n in 1..=total_lines {
+                                    if self.git_diff_lines.contains(&n) {
+                                        ln_text.push_str(&format!("{:>4} │\n", n));
+                                    } else {
+                                        ln_text.push_str(&format!("{:>4}  \n", n));
                                     }
-                                    ui.label(
-                                        egui::RichText::new(ln_text)
-                                            .color(ln_color)
-                                            .font(egui::FontId::monospace(font_size)),
-                                    );
-                                });
+                                }
+                                let ln_font = egui::FontId::monospace(font_size);
+                                let (ln_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(48.0, total_lines as f32 * font_size * line_height),
+                                    egui::Sense::hover(),
+                                );
+                                let painter = ui.painter();
+
+                                // paint background
+                                painter.rect_filled(ln_rect, 0.0, theme.bg_void);
+
+                                // paint line numbers
+                                painter.text(
+                                    ln_rect.left_top() + egui::vec2(4.0, 0.0),
+                                    egui::Align2::LEFT_TOP,
+                                    &ln_text,
+                                    ln_font.clone(),
+                                    ln_color,
+                                );
+
+                                // paint green gutter bar for diff lines
+                                let diff_color = egui::Color32::from_rgb(137, 180, 90);
+                                let line_h = font_size * line_height;
+                                for n in 1..=total_lines {
+                                    if self.git_diff_lines.contains(&n) {
+                                        let y = ln_rect.top() + (n - 1) as f32 * line_h;
+                                        painter.rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(ln_rect.right() - 6.0, y),
+                                                egui::vec2(4.0, line_h),
+                                            ),
+                                            0.0,
+                                            diff_color,
+                                        );
+                                    }
+                                }
+
                                 ui.add(egui::Separator::default().vertical());
                             }
 
@@ -1088,6 +1323,112 @@ impl eframe::App for KittyWriteApp {
                 });
         }
 
+        if self.show_settings {
+            let mut open = true;
+            egui::Window::new(format!("{} settings", ph::GEAR))
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .frame(
+                    egui::Frame::none()
+                        .fill(theme.bg_panel)
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::same(12)),
+                )
+                .show(ctx, |ui| {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("appearance")
+                            .color(theme.accent_eye)
+                            .size(14.0)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("theme").color(theme.fg_main).size(12.0));
+                        egui::ComboBox::from_id_salt("theme_combo")
+                            .selected_text(&self.lua.config.theme)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                for t in CatTheme::list() {
+                                    let response =
+                                        ui.selectable_label(self.lua.config.theme == *t, *t);
+                                    if response.clicked() {
+                                        self.lua.config.theme = t.to_string();
+                                    }
+                                }
+                            });
+                    });
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new("editor")
+                            .color(theme.accent_eye)
+                            .size(14.0)
+                            .strong(),
+                    );
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("font size")
+                                .color(theme.fg_main)
+                                .size(12.0),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut self.lua.config.font_size)
+                                .range(8.0..=48.0)
+                                .speed(0.5),
+                        );
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("tab width")
+                                .color(theme.fg_main)
+                                .size(12.0),
+                        );
+                        ui.add(egui::DragValue::new(&mut self.lua.config.tab_width).range(1..=16));
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("line height")
+                                .color(theme.fg_main)
+                                .size(12.0),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.lua.config.line_height, 1.0..=2.5)
+                                .show_value(false),
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.checkbox(&mut self.lua.config.show_line_numbers, "line numbers");
+                    ui.checkbox(&mut self.lua.config.word_wrap, "word wrap");
+                    ui.checkbox(&mut self.lua.config.auto_indent, "auto indent");
+                    ui.checkbox(&mut self.lua.config.auto_pair, "auto pair brackets");
+
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new("available themes:")
+                            .color(theme.fg_dim)
+                            .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new("kittywrite, mocha, frappe, macchiato, latte")
+                            .color(theme.fg_dim)
+                            .size(11.0),
+                    );
+                    ui.add_space(8.0);
+
+                    if ui.button("  close  ").clicked() {
+                        self.show_settings = false;
+                    }
+                });
+            self.show_settings = open;
+        }
+
         if self.show_lua_console {
             let mut open = true;
             egui::Window::new(format!("{} lua console", ph::TERMINAL_WINDOW))
@@ -1182,8 +1523,104 @@ impl eframe::App for KittyWriteApp {
         if act.toggle_file_tree {
             self.show_file_tree = !self.show_file_tree;
         }
+        if act.toggle_settings {
+            self.show_settings = !self.show_settings;
+        }
         if act.quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        if act.toggle_quick_open {
+            self.show_quick_open = !self.show_quick_open;
+            if self.show_quick_open {
+                self.quick_open_query.clear();
+                self.quick_open_selected = 0;
+            }
+        }
     }
+}
+
+fn recent_files_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    Some(dir.join("recent.txt"))
+}
+
+fn load_recent_files() -> Vec<String> {
+    let path = match recent_files_path() {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    std::fs::read_to_string(&path)
+        .map(|s| s.lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default()
+}
+
+fn save_recent_files(files: &[String]) {
+    let path = match recent_files_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let content = files.join("\n");
+    let _ = std::fs::write(path, content);
+}
+
+fn compute_git_diff(path: &std::path::Path) -> std::collections::HashSet<usize> {
+    let mut lines = std::collections::HashSet::new();
+
+    let dir = match path.parent() {
+        Some(d) => d,
+        None => return lines,
+    };
+
+    let filename = match path.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n,
+        None => return lines,
+    };
+
+    let output = std::process::Command::new("git")
+        .args(["diff", "--unified=0", "--", filename])
+        .current_dir(dir)
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(_) => return lines,
+    };
+
+    if !output.status.success() {
+        return lines;
+    }
+
+    let diff = String::from_utf8_lossy(&output.stdout);
+
+    let mut current_line: usize = 1;
+    for line in diff.lines() {
+        if line.starts_with("@@") {
+            // parse @@ -old_start,old_count +new_start,new_count @@
+            // we want new_start for the new file line numbers
+            if let Some(after) = line.strip_prefix("@@ -") {
+                if let Some(plus_part) = after.split(" +").nth(1) {
+                    if let Some(start) = plus_part
+                        .split(',')
+                        .next()
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        current_line = start;
+                    }
+                }
+            }
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            // added line in new file
+            lines.insert(current_line);
+            current_line += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            // deleted line - don't increment, it doesn't exist in new file
+            lines.insert(current_line);
+        } else if line.starts_with(' ') || line.is_empty() {
+            // context line - exists in both files
+            current_line += 1;
+        }
+    }
+
+    lines
 }
