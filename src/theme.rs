@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use egui::{Color32, CornerRadius, Stroke, Visuals};
 
 #[derive(Clone, Copy)]
@@ -79,7 +76,7 @@ fn default_syntax() -> (
 }
 
 fn kittywrite_original() -> CatTheme {
-    let (kw, func, str, cmt, num, typ, var, op, punct) = default_syntax();
+    let (kw, func, str_s, cmt, num, typ, var, op, punct) = default_syntax();
     CatTheme {
         bg_void: h("#0b0b12"),
         bg_panel: h("#11111c"),
@@ -95,7 +92,7 @@ fn kittywrite_original() -> CatTheme {
         selection_bg: Color32::from_rgba_premultiplied(85, 65, 135, 65),
         syntax_keyword: kw,
         syntax_function: func,
-        syntax_string: str,
+        syntax_string: str_s,
         syntax_comment: cmt,
         syntax_number: num,
         syntax_type: typ,
@@ -106,7 +103,6 @@ fn kittywrite_original() -> CatTheme {
 }
 
 fn catppuccin_mocha() -> CatTheme {
-    let (kw, func, str, cmt, num, typ, var, op, punct) = default_syntax();
     CatTheme {
         bg_void: h("#11111b"),
         bg_panel: h("#1e1e2e"),
@@ -133,7 +129,6 @@ fn catppuccin_mocha() -> CatTheme {
 }
 
 fn catppuccin_frappe() -> CatTheme {
-    let (_, _, _, _, _, _, _, _, _) = default_syntax();
     CatTheme {
         bg_void: h("#232634"),
         bg_panel: h("#303446"),
@@ -160,7 +155,6 @@ fn catppuccin_frappe() -> CatTheme {
 }
 
 fn catppuccin_macchiato() -> CatTheme {
-    let (_, _, _, _, _, _, _, _, _) = default_syntax();
     CatTheme {
         bg_void: h("#181924"),
         bg_panel: h("#24273a"),
@@ -187,7 +181,6 @@ fn catppuccin_macchiato() -> CatTheme {
 }
 
 fn catppuccin_latte() -> CatTheme {
-    let (_, _, _, _, _, _, _, _, _) = default_syntax();
     CatTheme {
         bg_void: h("#dce0e8"),
         bg_panel: h("#eff1f5"),
@@ -305,7 +298,7 @@ impl CatTheme {
     }
 
     pub fn apply(&self, ctx: &egui::Context) {
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         let mut vis = Visuals::dark();
         if self.fg_main.r() > 100
             && self.fg_main.g() > 100
@@ -336,7 +329,7 @@ impl CatTheme {
         vis.selection.stroke = Stroke::new(1.0, self.accent_eye);
         vis.window_corner_radius = CornerRadius::same(6);
         style.visuals = vis;
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 }
 

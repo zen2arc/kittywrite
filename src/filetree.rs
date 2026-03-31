@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use egui_phosphor::regular as ph;
 
@@ -14,6 +15,11 @@ pub enum GitStatus {
     Untracked,
 }
 
+struct DirCache {
+    entries: Vec<(PathBuf, bool, String)>,
+    timestamp: Instant,
+}
+
 pub struct FileTree {
     pub root: Option<PathBuf>,
     expanded: HashSet<PathBuf>,
@@ -23,6 +29,8 @@ pub struct FileTree {
     git_status: HashMap<PathBuf, GitStatus>,
     pub show_hidden: bool,
     collapsed_dirs: HashSet<PathBuf>,
+    dir_cache: HashMap<PathBuf, DirCache>,
+    git_indicator_cache: HashMap<PathBuf, (bool, Instant)>,
 }
 
 impl Default for FileTree {
@@ -36,6 +44,8 @@ impl Default for FileTree {
             git_status: HashMap::new(),
             show_hidden: false,
             collapsed_dirs: HashSet::new(),
+            dir_cache: HashMap::new(),
+            git_indicator_cache: HashMap::new(),
         }
     }
 }
@@ -46,17 +56,23 @@ impl FileTree {
             self.expanded.insert(path.clone());
             self.root = Some(path);
             self.refresh_git_status();
+            self.invalidate_dir_cache();
         }
     }
 
     pub fn refresh_git_status(&mut self) {
         self.git_status.clear();
+        self.git_indicator_cache.clear();
         if let Some(root) = self.root.clone() {
             self.scan_git_status(&root, &root);
         }
     }
 
-    fn scan_git_status(&mut self, root: &Path, dir: &Path) {
+    fn invalidate_dir_cache(&mut self) {
+        self.dir_cache.clear();
+    }
+
+    fn scan_git_status(&mut self, _root: &Path, dir: &Path) {
         let output = std::process::Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(dir)
@@ -109,6 +125,7 @@ impl FileTree {
                 );
                 if refresh_btn.on_hover_text("refresh").clicked() {
                     self.refresh_git_status();
+                    self.invalidate_dir_cache();
                 }
 
                 let new_file_btn = ui.add(
@@ -194,14 +211,14 @@ impl FileTree {
                     r.context_menu(|ui| {
                         if ui.button(format!("{}  new file", ph::FILE_PLUS)).clicked() {
                             self.new_file(root.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui
                             .button(format!("{}  new folder", ph::FOLDER_PLUS))
                             .clicked()
                         {
                             self.new_folder(root.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui
@@ -209,7 +226,8 @@ impl FileTree {
                             .clicked()
                         {
                             self.refresh_git_status();
-                            ui.close_menu();
+                            self.invalidate_dir_cache();
+                            ui.close();
                         }
                     });
 
@@ -254,30 +272,50 @@ impl FileTree {
             .contains(&self.search_query.to_lowercase())
     }
 
-    fn show_dir(
-        &mut self,
-        ui: &mut egui::Ui,
+    fn get_cached_entries(&mut self, dir: &Path) -> Option<&Vec<(PathBuf, bool, String)>> {
+        // check cache validity (5 second expiry)
+        let should_refresh = if let Some(cached) = self.dir_cache.get(dir) {
+            cached.timestamp.elapsed().as_secs() > 5
+        } else {
+            true
+        };
+
+        if should_refresh {
+            let entries = Self::read_dir_entries(dir, &self.search_query, self.show_hidden);
+            self.dir_cache.insert(
+                dir.to_path_buf(),
+                DirCache {
+                    entries,
+                    timestamp: Instant::now(),
+                },
+            );
+        }
+
+        self.dir_cache.get(dir).map(|c| &c.entries)
+    }
+
+    fn read_dir_entries(
         dir: &Path,
-        theme: &CatTheme,
-        clicked: &mut Option<PathBuf>,
-    ) {
+        search_query: &str,
+        show_hidden: bool,
+    ) -> Vec<(PathBuf, bool, String)> {
         let entries = match std::fs::read_dir(dir) {
             Ok(rd) => {
                 let mut v: Vec<(PathBuf, bool, String)> = rd
                     .filter_map(|e| e.ok())
                     .filter_map(|e| {
                         let name = e.file_name().to_string_lossy().to_string();
-                        if !self.show_hidden && name.starts_with('.') {
+                        if !show_hidden && name.starts_with('.') {
                             return None;
                         }
                         let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
                         Some((e.path(), is_dir, name))
                     })
                     .filter(|(_, is_dir, name)| {
-                        if self.search_query.is_empty() {
+                        if search_query.is_empty() {
                             return true;
                         }
-                        if self.matches_search(name) {
+                        if name.to_lowercase().contains(&search_query.to_lowercase()) {
                             return true;
                         }
                         // keep directories if they might contain matching files
@@ -291,7 +329,21 @@ impl FileTree {
                 });
                 v
             }
-            Err(_) => return,
+            Err(_) => return Vec::new(),
+        };
+        entries
+    }
+
+    fn show_dir(
+        &mut self,
+        ui: &mut egui::Ui,
+        dir: &Path,
+        theme: &CatTheme,
+        clicked: &mut Option<PathBuf>,
+    ) {
+        let entries = match self.get_cached_entries(dir) {
+            Some(entries) => entries.clone(),
+            None => return,
         };
 
         for (path, is_dir, name) in entries {
@@ -301,7 +353,7 @@ impl FileTree {
                 let folder_icon = if exp { ph::FOLDER_OPEN } else { ph::FOLDER };
 
                 // git status indicator for directories
-                let git_indicator = self.get_dir_git_indicator(&path);
+                let git_indicator = self.get_cached_dir_git_indicator(&path);
                 let git_color = if !git_indicator.is_empty() {
                     theme.accent_eye
                 } else {
@@ -329,23 +381,23 @@ impl FileTree {
                 r.context_menu(|ui| {
                     if ui.button(format!("{}  new file", ph::FILE_PLUS)).clicked() {
                         self.new_file(path.clone());
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button(format!("{}  new folder", ph::FOLDER_PLUS))
                         .clicked()
                     {
                         self.new_folder(path.clone());
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button(format!("{}  rename", ph::PENCIL_LINE)).clicked() {
                         self.start_rename(path.clone());
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button(format!("{}  delete", ph::TRASH)).clicked() {
                         self.delete_path(path.clone());
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 if exp {
@@ -397,16 +449,16 @@ impl FileTree {
                     r.context_menu(|ui| {
                         if ui.button(format!("{}  open", ph::FILE_TEXT)).clicked() {
                             *clicked = Some(path.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui.button(format!("{}  rename", ph::PENCIL_LINE)).clicked() {
                             self.start_rename(path.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button(format!("{}  delete", ph::TRASH)).clicked() {
                             self.delete_path(path.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                 }
@@ -414,11 +466,26 @@ impl FileTree {
         }
     }
 
-    fn get_dir_git_indicator(&self, path: &Path) -> String {
-        // check if any file in this dir has git status
-        let has_changes = self.git_status.keys().any(|p| p.starts_with(path));
-        if has_changes {
-            " *".to_string()
+    fn get_cached_dir_git_indicator(&mut self, path: &Path) -> String {
+        // check cache (10 second expiry)
+        let should_compute = if let Some((_, timestamp)) = self.git_indicator_cache.get(path) {
+            timestamp.elapsed().as_secs() > 10
+        } else {
+            true
+        };
+
+        if should_compute {
+            let has_changes = self.git_status.keys().any(|p| p.starts_with(path));
+            self.git_indicator_cache
+                .insert(path.to_path_buf(), (has_changes, Instant::now()));
+        }
+
+        if let Some((has_changes, _)) = self.git_indicator_cache.get(path) {
+            if *has_changes {
+                " *".to_string()
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         }
@@ -428,6 +495,7 @@ impl FileTree {
         let path = dir.join("untitled.txt");
         if let Ok(()) = std::fs::write(&path, "") {
             self.expanded.insert(dir);
+            self.invalidate_dir_cache();
         }
     }
 
@@ -435,6 +503,7 @@ impl FileTree {
         let path = dir.join("new-folder");
         let _ = std::fs::create_dir(&path);
         self.expanded.insert(path);
+        self.invalidate_dir_cache();
     }
 
     fn start_rename(&mut self, path: PathBuf) {
@@ -453,6 +522,7 @@ impl FileTree {
                 let new_path = parent.join(name);
                 let _ = std::fs::rename(target, new_path);
                 self.refresh_git_status();
+                self.invalidate_dir_cache();
             }
         }
         self.rename_target = None;
@@ -471,6 +541,7 @@ impl FileTree {
             let _ = std::fs::remove_file(&path);
         }
         self.refresh_git_status();
+        self.invalidate_dir_cache();
     }
 }
 

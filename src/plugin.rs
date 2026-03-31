@@ -568,7 +568,7 @@ impl PluginManager {
     }
 
     pub fn fire_command(&mut self, name: &str) -> Option<Result<String, String>> {
-        let plugin_name = self
+        let _plugin_name = self
             .plugins
             .iter()
             .find(|p| p.commands.contains_key(name))

@@ -1,39 +1,56 @@
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Stroke};
-use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 
 fn compute_hash(s: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()
 }
 
-struct CacheEntry {
-    generation: u64,
-    language: String,
-    style_key: u64,
+#[derive(Hash, PartialEq, Eq, Clone)]
+struct CacheKey {
     content_hash: u64,
+    language: String,
+    font_size: u32,
+}
+
+struct CacheEntry {
     job: LayoutJob,
 }
 
 pub struct Highlighter {
     ss: SyntaxSet,
     ts: ThemeSet,
-    cache: Mutex<Vec<CacheEntry>>,
+    syntax_cache: HashMap<String, SyntaxReference>,
+    cache: Mutex<HashMap<CacheKey, CacheEntry>>,
 }
 
 impl Default for Highlighter {
     fn default() -> Self {
+        let ss = SyntaxSet::load_defaults_newlines();
+        let ts = ThemeSet::load_defaults();
+
+        // pre-cache syntax lookups
+        let mut syntax_cache = HashMap::new();
+        for syntax in ss.syntaxes() {
+            syntax_cache.insert(syntax.name.to_lowercase(), syntax.clone());
+            for ext in &syntax.file_extensions {
+                syntax_cache.insert(ext.to_lowercase(), syntax.clone());
+            }
+        }
+
         Self {
-            ss: SyntaxSet::load_defaults_newlines(),
-            ts: ThemeSet::load_defaults(),
-            cache: Mutex::new(Vec::new()),
+            ss,
+            ts,
+            syntax_cache,
+            cache: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -45,27 +62,32 @@ impl Highlighter {
         language: &str,
         font_size: f32,
         line_height: f32,
-        generation: u64,
+        _generation: u64,
     ) -> LayoutJob {
-        let style_key = ((font_size.to_bits() as u64) << 32) | (line_height.to_bits() as u64);
         let content_hash = compute_hash(code);
+        let font_size_bits = font_size.to_bits();
+
+        let key = CacheKey {
+            content_hash,
+            language: language.to_string(),
+            font_size: font_size_bits,
+        };
 
         {
             let cache = self.cache.lock().unwrap();
-            if let Some(entry) = cache.iter().find(|e| {
-                e.generation == generation
-                    && e.language == language
-                    && e.style_key == style_key
-                    && e.content_hash == content_hash
-            }) {
+            if let Some(entry) = cache.get(&key) {
                 return entry.job.clone();
             }
         }
 
         let syntax = self
-            .ss
-            .find_syntax_by_name(language)
-            .or_else(|| self.ss.find_syntax_by_extension(language))
+            .syntax_cache
+            .get(&language.to_lowercase())
+            .or_else(|| {
+                self.ss
+                    .find_syntax_by_extension(language)
+                    .or_else(|| self.ss.find_syntax_by_name(language))
+            })
             .unwrap_or_else(|| self.ss.find_syntax_plain_text());
 
         let preferred = ["base16-ocean.dark", "base16-mocha.dark", "Monokai"];
@@ -123,16 +145,10 @@ impl Highlighter {
 
         {
             let mut cache = self.cache.lock().unwrap();
-            if cache.len() >= 8 {
-                cache.remove(0);
+            if cache.len() >= 32 {
+                cache.clear();
             }
-            cache.push(CacheEntry {
-                generation,
-                language: language.to_string(),
-                style_key,
-                content_hash,
-                job: job.clone(),
-            });
+            cache.insert(key, CacheEntry { job: job.clone() });
         }
 
         job
